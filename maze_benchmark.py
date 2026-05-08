@@ -1,5 +1,4 @@
 import random, time, tracemalloc, os, argparse
-from collections import deque
 from pathlib import Path
 from PIL import Image, ImageDraw
 import math
@@ -219,31 +218,10 @@ def save_maze_and_image(maze, base_name, rows, cols):
 
 
 # ================================================================
-#  PATHFINDING HELPER (BFS) – returns -1 if no path
+#  STRUCTURAL METRICS (NO BFS – purely from grid)
 # ================================================================
-def bfs_solution_length(maze, start=None, goal=None):
-    if start is None:
-        start = next((r,c) for r in range(maze.rows) for c in range(maze.cols) if maze.mask[r][c])
-    if goal is None:
-        goal = next((r,c) for r in range(maze.rows-1,-1,-1) for c in range(maze.cols-1,-1,-1) if maze.mask[r][c])
-    sr, sc = start
-    gr, gc = goal
-    if (sr, sc) == (gr, gc):
-        return 0
-    visited = [[False] * maze.cols for _ in range(maze.rows)]
-    q = deque([(sr, sc, 0)])
-    visited[sr][sc] = True
-    while q:
-        r, c, dist = q.popleft()
-        for nr, nc, _ in maze.neighbours(r, c):
-            if (nr, nc) == (gr, gc):
-                return dist + 1
-            if not visited[nr][nc] and maze.mask[nr][nc]:
-                visited[nr][nc] = True
-                q.append((nr, nc, dist + 1))
-    return -1   # disconnected graph
-
 def maze_metrics(maze):
+    """Return (dead_end_pct, avg_branch). No BFS."""
     passable = sum(r.count(True) for r in maze.mask)
     dead_ends = 0
     branch_sum = 0
@@ -260,15 +238,7 @@ def maze_metrics(maze):
                 branch_cells += 1
     dead_pct = (dead_ends / passable * 100) if passable else 0
     avg_branch = branch_sum / branch_cells if branch_cells else 0
-    sol = bfs_solution_length(maze)
-    return sol, dead_pct, avg_branch
-
-def fmt_sol(sol):
-    """Format solution length: number or '  N/A' (for width 10)."""
-    if sol is not None and sol >= 0:
-        return f"{sol:>10}"
-    else:
-        return "       N/A"
+    return dead_pct, avg_branch
 
 
 # ================================================================
@@ -369,7 +339,6 @@ def eller(rows, cols, seed=None, mask=None):
             row_set[c] = next_id
             next_id += 1
     for r in range(rows):
-        # 1. Connect adjacent passable cells with 50% chance
         for c in range(cols-1):
             if mask[r][c] and mask[r][c+1] and row_set.get(c) != row_set.get(c+1) and random.random() < 0.5:
                 old = row_set[c+1]
@@ -378,7 +347,6 @@ def eller(rows, cols, seed=None, mask=None):
                     if row_set[k] == old:
                         row_set[k] = new
                 maze.carve(r, c, E)
-        # 2. Last row: merge all distinct sets
         if r == rows-1:
             for c in range(cols-1):
                 if mask[r][c] and mask[r][c+1] and row_set.get(c) != row_set.get(c+1):
@@ -389,7 +357,6 @@ def eller(rows, cols, seed=None, mask=None):
                             row_set[k] = new
                     maze.carve(r, c, E)
             break
-        # 3. Vertical connections
         set_to_cols = {}
         for c, sid in row_set.items():
             set_to_cols.setdefault(sid, []).append(c)
@@ -488,9 +455,12 @@ def fmt_time(sec):
 
 
 # ================================================================
-#  MAIN TEST SUITE
+#  MAIN TEST SUITE (NO BFS – Wilson skipped on large sizes)
 # ================================================================
 def main(show_viewer=True):
+    # Set to True to skip Wilson on sizes >= 250×250 and thin 10×1000
+    SKIP_WILSON_LARGE = True
+
     viewable_sizes = [(10,10), (25,25), (50,50)]
     maze_collection = {alg: {} for alg in ALGORITHMS}
 
@@ -510,7 +480,8 @@ def main(show_viewer=True):
     for alg, gen in ALGORITHMS.items():
         times = []
         for r,c in sizes:
-            if alg in {"Kruskal", "Wilson"} and r*c >= 250*250:
+            # Skip Wilson on large sizes
+            if SKIP_WILSON_LARGE and alg == "Wilson" and r*c >= 250*250:
                 times.append("—")
                 continue
             maze, elapsed, _ = time_and_memory(gen, r, c)
@@ -532,7 +503,8 @@ def main(show_viewer=True):
     for alg, gen in ALGORITHMS.items():
         values = []
         for name, r, c in aspects:
-            if alg == "Wilson" and r*c > 50000:
+            # Skip Wilson on very large / thin mazes
+            if SKIP_WILSON_LARGE and alg == "Wilson" and r*c > 50000:
                 values.append("—")
                 continue
             maze, elapsed, _ = time_and_memory(gen, r, c)
@@ -544,16 +516,15 @@ def main(show_viewer=True):
         print(f"{alg:<15}" + "".join(f"{v:>14}" for v in values))
 
     # ------------------------------------------------------------------
-    # USE CASE 3: STRUCTURE METRICS (100×100)
+    # USE CASE 3: STRUCTURE METRICS (100×100) – NO BFS
     # ------------------------------------------------------------------
-    print("\n--- USE CASE 3: STRUCTURE METRICS ON 100×100 MAZES ---")
-    print(f"{'Algorithm':<15} {'Sol. Length':>12} {'Dead-End %':>11} {'Avg Branch':>11}")
-    print('-'*52)
+    print("\n--- USE CASE 3: STRUCTURE METRICS ON 100×100 MAZES (no pathfinding) ---")
+    print(f"{'Algorithm':<15} {'Dead-End %':>11} {'Avg Branch':>11}")
+    print('-'*40)
     for alg, gen in ALGORITHMS.items():
         maze, _, _ = time_and_memory(gen, 100, 100)
-        sol_len, dead_pct, avg_branch = maze_metrics(maze)
-        sol_str = fmt_sol(sol_len).strip()
-        print(f"{alg:<15} {sol_str:>12} {dead_pct:>10.1f}% {avg_branch:>11.2f}")
+        dead_pct, avg_branch = maze_metrics(maze)
+        print(f"{alg:<15} {dead_pct:>10.1f}% {avg_branch:>11.2f}")
 
     # ------------------------------------------------------------------
     # USE CASE 4: MEMORY EFFICIENCY (100×100)
@@ -566,13 +537,14 @@ def main(show_viewer=True):
         print(f"{alg:<15} {peak_mb:>20.2f} MB")
 
     # ------------------------------------------------------------------
-    # USE CASE 5: SHAPE VARIATION
+    # USE CASE 5: SHAPE VARIATION (with time and passable %)
     # ------------------------------------------------------------------
     print("\n--- USE CASE 5: SHAPE VARIATION (100×100 bound, various shapes) ---")
     shape_test_size = (100, 100)
-    print(f"Metrics on shapes (passable cells vary):")
-    print(f"{'Algorithm':<15} {'Shape':<12} {'Passable':>8} {'Sol. Len':>10} {'Dead%':>8} {'Branch':>8}")
-    print('-'*65)
+    total_cells = shape_test_size[0] * shape_test_size[1]
+    header = f"{'Algorithm':<15} {'Shape':<12} {'Passable':>10} {'Pass%':>8} {'Time':>12} {'Dead%':>8} {'Branch':>8}"
+    print(header)
+    print('-'*80)
     for shape_name, shape_func in SHAPES.items():
         if shape_func is None:
             mask = None
@@ -581,11 +553,18 @@ def main(show_viewer=True):
         for alg, gen in ALGORITHMS.items():
             maze, elapsed, _ = time_and_memory(gen, shape_test_size[0], shape_test_size[1], mask=mask)
             passable = sum(r.count(True) for r in maze.mask)
-            sol_len, dead_pct, avg_branch = maze_metrics(maze)
+            pass_pct = (passable / total_cells) * 100
+            dead_pct, avg_branch = maze_metrics(maze)
             base = f"{alg}_{shape_name}_{shape_test_size[0]}x{shape_test_size[1]}"
             save_maze_and_image(maze, base, shape_test_size[0], shape_test_size[1])
-            sol_display = fmt_sol(sol_len)
-            print(f"{alg:<15} {shape_name:<12} {passable:>8} {sol_display} {dead_pct:>7.1f}% {avg_branch:>8.2f}")
+            print(f"{alg:<15} {shape_name:<12} {passable:>10} {pass_pct:>7.1f}% {fmt_time(elapsed):>12} {dead_pct:>7.1f}% {avg_branch:>8.2f}")
+
+    # ------------------------------------------------------------------
+    # ASCII VISUAL SAMPLE
+    # ------------------------------------------------------------------
+    print("\n--- SAMPLE VISUAL: 10×10 Backtracker ---")
+    sample = recursive_backtracker(10, 10, seed=42)
+    print(sample.to_ascii())
 
     # ------------------------------------------------------------------
     # INTERACTIVE MAZE VIEWER (loads any saved .maze file)
@@ -616,15 +595,10 @@ def main(show_viewer=True):
         size_list = ", ".join(f"{r}x{c}" for r,c in sorted_sizes)
 
         print("\n" + "="*80)
-        print("INTERACTIVE MAZE VIEWER")
+        print("INTERACTIVE MAZE VIEWER (ASCII)")
         print("Available algorithms: " + ", ".join(ALGORITHMS.keys()))
         print("Available sizes: " + size_list)
-        print("Also shape mazes saved (e.g., Backtracker_Circle_100x100.maze).")
-        print("Commands:")
-        print("  view <algorithm> <size>            e.g. view Backtracker 500x500")
-        print("  view <algorithm> <shape> <size>    e.g. view Prim Circle 100x100")
-        print("  view all                           (shows all 10x10 and 25x25)")
-        print("  exit")
+        print("Commands: view <algorithm> <size>  |  view <algorithm> <shape> <size>  |  view all  |  exit")
         print("="*80)
 
         while True:
@@ -647,7 +621,7 @@ def main(show_viewer=True):
             if len(parts) >= 3 and parts[0] == 'view':
                 alg = parts[1].capitalize()
                 if alg not in ALGORITHMS:
-                    print(f"Unknown algorithm '{alg}'. Choose from: {', '.join(ALGORITHMS.keys())}")
+                    print(f"Unknown algorithm '{alg}'.")
                     continue
                 if len(parts) >= 4 and parts[2] in SHAPES:
                     shape_name = parts[2]
@@ -660,7 +634,6 @@ def main(show_viewer=True):
                 except:
                     print("Invalid size format. Use e.g. 100x100")
                     continue
-
                 found = None
                 for key, path in available_views.items():
                     a, (rr, cc), name = key
@@ -677,7 +650,7 @@ def main(show_viewer=True):
                         maze, _, _ = time_and_memory(ALGORITHMS[alg], r, c)
                         print(maze.to_ascii())
                     else:
-                        print(f"Maze {alg} {shape_name} {size_str} not found. It may not have been generated.")
+                        print(f"Maze not found.")
             else:
                 print("Unknown command.")
 
