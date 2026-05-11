@@ -1,197 +1,157 @@
 """
-d_star_pathfinding.py
-========================
-Pathfinding Benchmark
-Author : Hamna Sajid
+pathfinding_visualiser.py
+=========================
+Pathfinding Animation Generator
+Authors : (your group names here)
 Course  : CSE 317 – Design and Analysis of Algorithms, Spring 2026
 
 Overview
 --------
-Runs four pathfinding algorithms on the five best mazes produced by
-maze_benchmark.py, benchmarks them across four use cases, and records
-all results to a CSV file.
+Generates an animated GIF for every (algorithm × maze) combination showing:
+  1. Maze walls rendered in full.
+  2. Explored / expanded cells appearing frame-by-frame (light blue).
+  3. Final optimal path highlighted in orange.
+  4. Start cell (green dot) and end cell (red dot) always on top.
 
-All four algorithms are guaranteed to return the OPTIMAL path (shortest
-in terms of cells visited / true Euclidean distance where applicable).
+Algorithms animated
+-------------------
+1. Theta*                 (any-angle A*)
+2. Bidirectional Dijkstra (dual-frontier)
+3. D* Lite                (incremental A*)
+4. ALT                    (landmark A*)
+5. AHPP                   (hierarchical predictive — shows intersection nodes
+                           and corridor stitching in a distinct colour)
 
-Algorithms
-----------
-1. Theta*            – Any-angle pathfinding, truly optimal Euclidean paths
-2. Bidirectional Dijkstra – Search from both ends simultaneously
-3. D* Lite           – Dynamic / incremental A*, handles changing obstacles
-4. ALT (Landmark A*) – A* with triangle-inequality landmark heuristics
-
-Use Cases
----------
-UC1 — Basic Pathfinding       : time, path length, nodes explored per maze
-UC2 — Path Quality            : path length in cells vs true Euclidean distance
-UC3 — Nodes Explored          : pure search efficiency (nodes visited before solution)
-UC4 — Dynamic Replanning      : D* Lite replan vs fresh A* after obstacles added
-
-File layout expected
---------------------
-project_root/
-    maze_benchmark.py
-    mazes_for_pathfinding/
-        best_mazes/
-            BEST_<shape>_100x100_<algo>.maze
-            best_mazes_summary.csv
-    path_finding_algos/          ← this file lives here
-        pathfinding_benchmark.py
-        pathfinding_results.csv  ← written by this script
+Output
+------
+path_finding_algos/animations/<AlgoName>_<ShapeName>.gif
 
 Usage
 -----
     cd path_finding_algos
-    python pathfinding_benchmark.py
+    python pathfinding_visualiser.py [--cell N] [--fps N] [--skip N]
+
+    --cell  pixel size per maze cell   (default 6)
+    --fps   frames per second          (default 20)
+    --skip  explored cells per frame   (default 5, higher = smaller/faster GIF)
 """
 
-import os
-import csv
-import math
-import time
+import argparse
+import copy
 import heapq
-import random
+import math
+from collections import deque
 from pathlib import Path
+from PIL import Image, ImageDraw
 
 # ================================================================
 # PATH RESOLUTION
-# Best mazes live one level up, inside mazes_for_pathfinding/best_mazes/
 # ================================================================
-_HERE      = Path(__file__).parent          # …/path_finding_algos/
-_ROOT      = _HERE.parent                   # project root
-BEST_DIR   = _ROOT / "mazes_for_pathfinding" / "best_mazes"
-RESULTS_CSV = _HERE / "pathfinding_results.csv"
+_HERE    = Path(__file__).parent
+_ROOT    = _HERE.parent
+BEST_DIR = _ROOT / "mazes_for_pathfinding" / "best_mazes"
+ANIM_DIR = _HERE / "animations"
+ANIM_DIR.mkdir(exist_ok=True)
+
+# ================================================================
+# COLOUR PALETTE
+# ================================================================
+COL_WALL         = (30,  30,  30)
+COL_BG           = (255, 255, 255)
+COL_OUTSIDE      = (20,  20,  20)
+COL_EXPLORED     = (173, 216, 230)   # light blue   – cells expanded
+COL_FRONTIER     = (100, 149, 237)   # cornflower   – open-set cells
+COL_PATH         = (255, 165,   0)   # orange       – final path
+COL_START        = (0,   200,   0)   # green        – start
+COL_END          = (220,  20,  60)   # crimson      – end
+COL_AHPP_NODE    = (180,  90, 220)   # purple       – AHPP intersection nodes
+COL_AHPP_CORRIDOR= (220, 180, 255)   # light purple – AHPP corridor stitching
 
 
 # ================================================================
-# MAZE LOADER
-# Re-implements the minimal subset of Maze needed for pathfinding
-# so this file is self-contained (no import from maze_benchmark).
+# MAZE  (self-contained copy — no import from other files)
 # ================================================================
 
 class Maze:
-    """
-    Lightweight maze representation loaded from a .maze file.
+    """Lightweight maze loaded from a .maze file."""
 
-    Attributes
-    ----------
-    rows, cols : int
-    grid       : list[list[int]]   bitmask per cell (N=1,E=2,S=4,W=8)
-    mask       : list[list[bool]]
-    start      : (row, col)
-    end        : (row, col)
-    """
-
-    N, E, S, W       = 1, 2, 4, 8
-    DX               = {1: -1, 2: 0,  4: 1,  8: 0}
-    DY               = {1:  0, 2:  1, 4: 0,  8: -1}
-    DIRS             = [1, 2, 4, 8]
+    N, E, S, W = 1, 2, 4, 8
+    DX   = {1: -1, 2: 0,  4: 1,  8: 0}
+    DY   = {1:  0, 2:  1, 4: 0,  8: -1}
+    DIRS = [1, 2, 4, 8]
 
     def __init__(self, rows, cols, grid, mask, start, end):
-        self.rows  = rows
-        self.cols  = cols
-        self.grid  = grid
-        self.mask  = mask
-        self.start = start
-        self.end   = end
+        self.rows = rows; self.cols = cols
+        self.grid = grid; self.mask = mask
+        self.start = start; self.end = end
 
-    # ------------------------------------------------------------------
-    # Neighbours via carved walls (grid connectivity)
-    # ------------------------------------------------------------------
+    def in_bounds(self, r, c):
+        return 0 <= r < self.rows and 0 <= c < self.cols
+
+    def is_passable(self, r, c):
+        return self.in_bounds(r, c) and self.mask[r][c]
+
     def passable_neighbours(self, r, c):
-        """
-        Yield (nr, nc) for every carved passage leaving cell (r, c).
-        Only cells that are within the mask are returned.
-        """
         for d in self.DIRS:
             if self.grid[r][c] & d:
-                nr = r + self.DX[d]
-                nc = c + self.DY[d]
-                if 0 <= nr < self.rows and 0 <= nc < self.cols \
-                        and self.mask[nr][nc]:
+                nr = r + self.DX[d]; nc = c + self.DY[d]
+                if self.in_bounds(nr, nc) and self.mask[nr][nc]:
                     yield nr, nc
 
-    # ------------------------------------------------------------------
-    # Line-of-sight check (used by Theta*)
-    # ------------------------------------------------------------------
     def line_of_sight(self, r0, c0, r1, c1):
-        """
-        Return True if there is an unobstructed straight line from
-        (r0,c0) to (r1,c1) — i.e. every grid cell the line passes
-        through is passable and connected to its neighbour in the
-        traversal direction.
-
-        Uses a grid-based Bresenham walk that checks wall bits at each
-        step, so diagonal visibility respects carved passages.
-        """
-        dr = abs(r1 - r0)
-        dc = abs(c1 - c0)
+        dr = abs(r1-r0); dc = abs(c1-c0)
         r, c = r0, c0
         sr = 1 if r1 > r0 else -1
         sc = 1 if c1 > c0 else -1
-
         if dc == 0:
-            # Vertical line
             for _ in range(dr):
                 d = self.S if sr > 0 else self.N
-                if not (self.grid[r][c] & d):
-                    return False
+                if not (self.grid[r][c] & d): return False
                 r += sr
             return True
-
         if dr == 0:
-            # Horizontal line
             for _ in range(dc):
                 d = self.E if sc > 0 else self.W
-                if not (self.grid[r][c] & d):
-                    return False
+                if not (self.grid[r][c] & d): return False
                 c += sc
             return True
-
         err = dc - dr
         while r != r1 or c != c1:
             e2 = 2 * err
-            moved_r = moved_c = False
             if e2 > -dr:
-                err -= dr
-                d = self.S if sr > 0 else self.N
-                if not (self.grid[r][c] & d):
-                    return False
-                r  += sr
-                moved_r = True
+                err -= dr; d = self.S if sr > 0 else self.N
+                if not (self.grid[r][c] & d): return False
+                r += sr
             if e2 < dc:
-                err += dc
-                d = self.E if sc > 0 else self.W
-                if not (self.grid[r][c] & d):
-                    return False
-                c  += sc
-                moved_c = True
-            if moved_r and moved_c:
-                # Diagonal step — both transitions must be open
-                pass
+                err += dc; d = self.E if sc > 0 else self.W
+                if not (self.grid[r][c] & d): return False
+                c += sc
         return True
 
-    # ------------------------------------------------------------------
-    # Loader
-    # ------------------------------------------------------------------
+    def block_cell(self, r, c):
+        opp = {1: 4, 4: 1, 2: 8, 8: 2}
+        for d in self.DIRS:
+            if self.grid[r][c] & d:
+                nr = r + self.DX[d]; nc = c + self.DY[d]
+                if self.in_bounds(nr, nc):
+                    self.grid[nr][nc] &= ~opp[d]
+        self.grid[r][c] = 0; self.mask[r][c] = False
+
     @staticmethod
     def from_file(path):
-        """Load a maze saved by maze_benchmark.to_file()."""
         with open(path) as f:
             rows, cols = map(int, f.readline().split())
             start = end = None
             line2 = f.readline().strip()
             if line2.startswith("start="):
-                p      = line2.split()
+                p = line2.split()
                 sr, sc = map(int, p[0].split("=")[1].split(","))
                 er, ec = map(int, p[1].split("=")[1].split(","))
-                start  = (sr, sc) if sr >= 0 else None
-                end    = (er, ec) if er >= 0 else None
-                data   = [f.readline() for _ in range(rows)]
+                start = (sr, sc) if sr >= 0 else None
+                end   = (er, ec) if er >= 0 else None
+                data  = [f.readline() for _ in range(rows)]
             else:
                 data = [line2] + [f.readline() for _ in range(rows - 1)]
-
             mask = [[True]  * cols for _ in range(rows)]
             grid = [[0]     * cols for _ in range(rows)]
             for r, line in enumerate(data):
@@ -201,23 +161,7 @@ class Maze:
                     grid[r] = [int(x)       for x in parts[1].split()]
                 else:
                     grid[r] = [int(x) for x in parts[0].split()]
-
         return Maze(rows, cols, grid, mask, start, end)
-
-    def block_cell(self, r, c):
-        """
-        Temporarily block cell (r,c) by removing all its wall bits and
-        updating neighbours — used in UC4 dynamic replanning.
-        """
-        for d in self.DIRS:
-            if self.grid[r][c] & d:
-                nr = r + self.DX[d]
-                nc = c + self.DY[d]
-                opp = {1: 4, 4: 1, 2: 8, 8: 2}[d]
-                if 0 <= nr < self.rows and 0 <= nc < self.cols:
-                    self.grid[nr][nc] &= ~opp
-        self.grid[r][c] = 0
-        self.mask[r][c] = False
 
 
 # ================================================================
@@ -225,935 +169,786 @@ class Maze:
 # ================================================================
 
 def euclidean(r0, c0, r1, c1):
-    """Euclidean distance between two grid cells."""
     return math.hypot(r1 - r0, c1 - c0)
 
-
-def path_euclidean_length(path):
-    """True Euclidean length of a path (list of (r,c) tuples)."""
-    if len(path) < 2:
-        return 0.0
-    return sum(euclidean(path[i][0], path[i][1],
-                         path[i+1][0], path[i+1][1])
-               for i in range(len(path) - 1))
-
-
 def reconstruct_path(came_from, start, end):
-    """Walk came_from dict backwards from end to start."""
-    path = []
-    node = end
+    path = []; node = end
     while node is not None:
-        path.append(node)
-        node = came_from.get(node)
+        path.append(node); node = came_from.get(node)
     path.reverse()
-    return path if path[0] == start else []
+    return path if (path and path[0] == start) else []
 
 
 # ================================================================
-# ALGORITHM 1 — THETA*  (Any-Angle Pathfinding)
+# INSTRUMENTED ALGORITHM GENERATORS
+# Each yields (event_type, cell) events during the search so the
+# visualiser can capture exploration order frame-by-frame.
+#
+# event_type values
+# -----------------
+# 'explore'        – cell popped from open set (being expanded)
+# 'frontier'       – cell pushed to open set
+# 'path'           – cell is on the final optimal path
+# 'ahpp_node'      – AHPP intersection / dead-end node (purple)
+# 'ahpp_corridor'  – cell being stitched from a pre-stored corridor
 # ================================================================
 
-def theta_star(maze: Maze):
-    """
-    Theta* — Any-Angle Pathfinding.
-
-    Design Paradigm
-    ---------------
-    A* extended with a line-of-sight check at each relaxation step.
-    When expanding a node s, instead of linking its neighbour s' to s
-    directly, Theta* checks whether s' has line-of-sight to s's *parent*
-    p(s).  If it does, it shortcuts the link: came_from[s'] = p(s),
-    using the true Euclidean distance as the cost.  This allows paths at
-    any angle, not just the 4 cardinal grid directions.
-
-    Optimality
-    ----------
-    Theta* returns the shortest Euclidean-distance path that respects the
-    maze's connectivity.  It is provably optimal among any-angle paths on
-    the given grid graph.
-
-    Complexity
-    ----------
-    Time  : O(N log N)   same asymptotic as A*, larger constant due to
-                         line-of-sight checks
-    Space : O(N)
-
-    Parameters
-    ----------
-    maze : Maze
-
-    Returns
-    -------
-    path         : list[(r,c)]  optimal path from start to end
-    nodes_explored : int        cells popped from the open set
-    """
+# ----------------------------------------------------------------
+# 1. Theta*
+# ----------------------------------------------------------------
+def theta_star_events(maze: Maze):
+    """Theta* — any-angle A* with line-of-sight shortcutting."""
     start, end = maze.start, maze.end
-    if start is None or end is None:
-        return [], 0
+    if start is None or end is None: return
 
-    g           = {start: 0.0}
-    came_from   = {start: None}
-    open_set    = [(euclidean(*start, *end), start)]
-    closed      = set()
-    nodes_explored = 0
+    g = {start: 0.0}; came_from = {start: None}
+    open_set = [(euclidean(*start, *end), start)]; closed = set()
 
     while open_set:
         _, s = heapq.heappop(open_set)
-        if s in closed:
-            continue
-        closed.add(s)
-        nodes_explored += 1
-
+        if s in closed: continue
+        closed.add(s); yield ('explore', s)
         if s == end:
-            return reconstruct_path(came_from, start, end), nodes_explored
-
+            for cell in reconstruct_path(came_from, start, end):
+                yield ('path', cell)
+            return
         for nr, nc in maze.passable_neighbours(*s):
             s2 = (nr, nc)
-            if s2 in closed:
-                continue
-
-            # Theta* update: try to inherit parent of s
+            if s2 in closed: continue
             parent_s = came_from[s]
             if parent_s is not None and maze.line_of_sight(*parent_s, *s2):
-                # Path 2: link s2 directly to parent(s)
                 g_new = g[parent_s] + euclidean(*parent_s, *s2)
                 if g_new < g.get(s2, math.inf):
-                    g[s2]         = g_new
-                    came_from[s2] = parent_s
-                    f             = g_new + euclidean(*s2, *end)
-                    heapq.heappush(open_set, (f, s2))
+                    g[s2] = g_new; came_from[s2] = parent_s
+                    heapq.heappush(open_set, (g_new + euclidean(*s2, *end), s2))
+                    yield ('frontier', s2)
             else:
-                # Path 1: standard A* link through s
                 g_new = g[s] + euclidean(*s, *s2)
                 if g_new < g.get(s2, math.inf):
-                    g[s2]         = g_new
-                    came_from[s2] = s
-                    f             = g_new + euclidean(*s2, *end)
-                    heapq.heappush(open_set, (f, s2))
-
-    return [], nodes_explored   # no path found
+                    g[s2] = g_new; came_from[s2] = s
+                    heapq.heappush(open_set, (g_new + euclidean(*s2, *end), s2))
+                    yield ('frontier', s2)
 
 
-# ================================================================
-# ALGORITHM 2 — BIDIRECTIONAL DIJKSTRA
-# ================================================================
-
-def bidirectional_dijkstra(maze: Maze):
-    """
-    Bidirectional Dijkstra.
-
-    Design Paradigm
-    ---------------
-    Run two simultaneous Dijkstra searches — one forward from start,
-    one backward from end.  The search terminates when a node is settled
-    by *both* searches.  The optimal meeting point minimises
-        d_f(u) + d_b(u)
-    over all settled nodes u.
-
-    Optimality
-    ----------
-    The algorithm is provably optimal: when it terminates it returns
-    the shortest path (in cells / uniform edge weight).  The meeting
-    point condition correctly handles non-symmetric graphs.
-
-    Complexity
-    ----------
-    Time  : O(√V · log V) roughly — explores far fewer nodes than
-            one-directional Dijkstra on large grids.
-    Space : O(V)
-
-    Returns
-    -------
-    path           : list[(r,c)]
-    nodes_explored : int   total nodes settled across both frontiers
-    """
+# ----------------------------------------------------------------
+# 2. Bidirectional Dijkstra
+# ----------------------------------------------------------------
+def bidirectional_dijkstra_events(maze: Maze):
+    """Bidirectional Dijkstra — dual frontier meeting in the middle."""
     start, end = maze.start, maze.end
-    if start is None or end is None:
-        return [], 0
+    if start is None or end is None: return
 
-    # Forward search
-    dist_f    = {start: 0}
-    prev_f    = {start: None}
-    open_f    = [(0, start)]
-    settled_f = set()
+    dist_f = {start: 0}; prev_f = {start: None}; open_f = [(0, start)]
+    dist_b = {end:   0}; prev_b = {end:   None}; open_b = [(0, end)]
+    settled_f = set(); settled_b = set()
+    best = math.inf; meeting = None
 
-    # Backward search
-    dist_b    = {end: 0}
-    prev_b    = {end: None}
-    open_b    = [(0, end)]
-    settled_b = set()
-
-    best      = math.inf
-    meeting   = None
-    nodes_explored = 0
-
-    def _build_path(node):
-        """Stitch forward and backward came-from chains at meeting node."""
-        path_fwd = []
-        n = node
-        while n is not None:
-            path_fwd.append(n)
-            n = prev_f.get(n)
-        path_fwd.reverse()
-
-        path_bwd = []
-        n = prev_b.get(node)
-        while n is not None:
-            path_bwd.append(n)
-            n = prev_b.get(n)
-
-        return path_fwd + path_bwd
+    def _build(node):
+        pf = []; n = node
+        while n is not None: pf.append(n); n = prev_f.get(n)
+        pf.reverse()
+        pb = []; n = prev_b.get(node)
+        while n is not None: pb.append(n); n = prev_b.get(n)
+        return pf + pb
 
     while open_f or open_b:
-        # Alternate: expand the frontier with the smaller tentative distance
-        expand_fwd = (open_f and
-                      (not open_b or open_f[0][0] <= open_b[0][0]))
-
+        expand_fwd = (open_f and (not open_b or open_f[0][0] <= open_b[0][0]))
         if expand_fwd and open_f:
             d, u = heapq.heappop(open_f)
-            if u in settled_f:
-                continue
-            settled_f.add(u)
-            nodes_explored += 1
-
+            if u in settled_f: continue
+            settled_f.add(u); yield ('explore', u)
             if d + dist_b.get(u, math.inf) < best:
-                best    = d + dist_b.get(u, math.inf)
-                meeting = u
-
-            # Termination: if the best possible improvement is impossible
-            if open_f and open_b:
-                if open_f[0][0] + open_b[0][0] >= best:
-                    break
-
+                best = d + dist_b.get(u, math.inf); meeting = u
+            if open_f and open_b and open_f[0][0] + open_b[0][0] >= best: break
             for nr, nc in maze.passable_neighbours(*u):
-                v     = (nr, nc)
-                g_new = dist_f[u] + 1   # uniform cost
-                if g_new < dist_f.get(v, math.inf):
-                    dist_f[v] = g_new
-                    prev_f[v] = u
-                    heapq.heappush(open_f, (g_new, v))
-
+                v = (nr, nc); gn = dist_f[u] + 1
+                if gn < dist_f.get(v, math.inf):
+                    dist_f[v] = gn; prev_f[v] = u
+                    heapq.heappush(open_f, (gn, v)); yield ('frontier', v)
         elif open_b:
             d, u = heapq.heappop(open_b)
-            if u in settled_b:
-                continue
-            settled_b.add(u)
-            nodes_explored += 1
-
+            if u in settled_b: continue
+            settled_b.add(u); yield ('explore', u)
             if dist_f.get(u, math.inf) + d < best:
-                best    = dist_f.get(u, math.inf) + d
-                meeting = u
-
-            if open_f and open_b:
-                if open_f[0][0] + open_b[0][0] >= best:
-                    break
-
+                best = dist_f.get(u, math.inf) + d; meeting = u
+            if open_f and open_b and open_f[0][0] + open_b[0][0] >= best: break
             for nr, nc in maze.passable_neighbours(*u):
-                v     = (nr, nc)
-                g_new = dist_b[u] + 1
-                if g_new < dist_b.get(v, math.inf):
-                    dist_b[v] = g_new
-                    prev_b[v] = u
-                    heapq.heappush(open_b, (g_new, v))
+                v = (nr, nc); gn = dist_b[u] + 1
+                if gn < dist_b.get(v, math.inf):
+                    dist_b[v] = gn; prev_b[v] = u
+                    heapq.heappush(open_b, (gn, v)); yield ('frontier', v)
 
-    if meeting is None:
-        return [], nodes_explored
-
-    return _build_path(meeting), nodes_explored
+    if meeting:
+        for cell in _build(meeting): yield ('path', cell)
 
 
-# ================================================================
-# ALGORITHM 3 — D* LITE  (Dynamic / Incremental A*)
-# ================================================================
-
-class DStarLite:
-    """
-    D* Lite — Dynamic / Incremental A*.
-
-    Design Paradigm
-    ---------------
-    D* Lite maintains a consistent heuristic search structure (similar to
-    a backward A*) that can be *repaired* cheaply when edge costs change
-    (e.g. when cells are blocked).  On replanning it only reprocesses the
-    nodes whose costs have changed, rather than searching from scratch.
-
-    Optimality
-    ----------
-    D* Lite is provably optimal: the path it returns has minimum cost
-    in the current graph.  After obstacle updates it repairs the search
-    tree only as much as needed and still returns the optimal path.
-
-    Complexity
-    ----------
-    Initial search : O(N log N)
-    Replan after k changes: O(k log N) amortised — dramatically cheaper
-    than a full O(N log N) fresh search when k << N.
-
-    Usage
-    -----
-        dstar = DStarLite(maze)
-        path, nodes = dstar.initial_search()
-
-        # Later, when obstacles change:
-        dstar.update_obstacles(blocked_cells)
-        path, nodes = dstar.replan()
-    """
+# ----------------------------------------------------------------
+# 3. D* Lite
+# ----------------------------------------------------------------
+def d_star_lite_events(maze: Maze):
+    """D* Lite — incremental A* (initial search only for animation)."""
+    start, end = maze.start, maze.end
+    if start is None or end is None: return
 
     INF = math.inf
+    g   = {}; rhs = {}
+    for r in range(maze.rows):
+        for c in range(maze.cols):
+            if maze.mask[r][c]: g[(r,c)] = rhs[(r,c)] = INF
 
-    def __init__(self, maze: Maze):
-        """
-        Initialise D* Lite on the given maze.
+    k_m = 0; rhs[end] = 0
+    U = []; U_set = {}
 
-        Parameters
-        ----------
-        maze : Maze   The maze to search.  start and end must be set.
-        """
-        self.maze   = maze
-        self.start  = maze.start
-        self.goal   = maze.end
-        self.k_m    = 0           # key modifier for lazy deletion
-        self._reset()
+    def h(s): return euclidean(*s, *start)
+    def key(s):
+        m = min(g.get(s, INF), rhs.get(s, INF))
+        return (m + h(s) + k_m, m)
+    def push(s):
+        k = key(s); heapq.heappush(U, (k, s)); U_set[s] = k
+    def update(u):
+        if u != end:
+            nbrs = list(maze.passable_neighbours(*u))
+            rhs[u] = min((1 + g.get(s2, INF) for s2 in nbrs), default=INF)
+        if u in U_set: del U_set[u]
+        if g.get(u, INF) != rhs.get(u, INF): push(u)
 
-    def _reset(self):
-        """Initialise / reinitialise all search structures."""
-        self.g    = {}   # g[s] = cost-to-go from s to goal
-        self.rhs  = {}   # rhs[s] = one-step lookahead value
-        self.U    = []   # priority queue: (key, node)
-        self.U_set = {}  # node → key in queue (for lazy deletion)
-        self.nodes_explored = 0
+    push(end); explored_set = set()
+    while U:
+        k_old, u = heapq.heappop(U)
+        if U_set.get(u) != k_old: continue
+        k_new = key(u)
+        if k_old < k_new:
+            heapq.heappush(U, (k_new, u)); U_set[u] = k_new; continue
+        if g.get(u, INF) > rhs.get(u, INF):
+            g[u] = rhs[u]; del U_set[u]
+            if u not in explored_set: explored_set.add(u); yield ('explore', u)
+            for s in maze.passable_neighbours(*u): update(s)
+        else:
+            g[u] = INF; update(u)
+            if u not in explored_set: explored_set.add(u); yield ('explore', u)
+            for s in maze.passable_neighbours(*u): update(s)
+        sk = key(start)
+        if U and U[0][0] >= sk and rhs.get(start, INF) == g.get(start, INF):
+            break
 
-        for r in range(self.maze.rows):
-            for c in range(self.maze.cols):
-                if self.maze.mask[r][c]:
-                    self.g[(r, c)]   = self.INF
-                    self.rhs[(r, c)] = self.INF
-
-        self.rhs[self.goal] = 0
-        k = self._calculate_key(self.goal)
-        heapq.heappush(self.U, (k, self.goal))
-        self.U_set[self.goal] = k
-
-    def _h(self, s):
-        """Heuristic: Euclidean distance from s to start."""
-        return euclidean(*s, *self.start)
-
-    def _calculate_key(self, s):
-        """
-        Compute the priority key for node s.
-        key = (min(g,rhs) + h(s) + k_m,  min(g,rhs))
-        Stored as a tuple so heapq compares lexicographically.
-        """
-        m = min(self.g.get(s, self.INF), self.rhs.get(s, self.INF))
-        return (m + self._h(s) + self.k_m, m)
-
-    def _update_vertex(self, u):
-        """Recompute rhs[u] and update the priority queue."""
-        if u != self.goal:
-            self.rhs[u] = min(
-                1 + self.g.get(s2, self.INF)
-                for s2 in self.maze.passable_neighbours(*u)
-            ) if list(self.maze.passable_neighbours(*u)) else self.INF
-
-        # Remove old entry (lazy deletion via U_set)
-        if u in self.U_set:
-            del self.U_set[u]
-
-        if self.g.get(u, self.INF) != self.rhs.get(u, self.INF):
-            k = self._calculate_key(u)
-            heapq.heappush(self.U, (k, u))
-            self.U_set[u] = k
-
-    def _compute_shortest_path(self):
-        """Core D* Lite loop — process inconsistent nodes until start is consistent."""
-        while self.U:
-            k_old, u = heapq.heappop(self.U)
-
-            # Lazy deletion
-            if self.U_set.get(u) != k_old:
-                continue
-
-            k_new = self._calculate_key(u)
-            g_u   = self.g.get(u, self.INF)
-            rhs_u = self.rhs.get(u, self.INF)
-
-            if k_old < k_new:
-                heapq.heappush(self.U, (k_new, u))
-                self.U_set[u] = k_new
-            elif g_u > rhs_u:
-                # Overconsistent → make consistent
-                self.g[u] = rhs_u
-                del self.U_set[u]
-                self.nodes_explored += 1
-                for s in self.maze.passable_neighbours(*u):
-                    self._update_vertex(s)
-            else:
-                # Underconsistent → raise g
-                self.g[u] = self.INF
-                self._update_vertex(u)
-                self.nodes_explored += 1
-                for s in self.maze.passable_neighbours(*u):
-                    self._update_vertex(s)
-
-            # Check termination
-            start_key = self._calculate_key(self.start)
-            if self.U and self.U[0][0] >= start_key:
-                if self.rhs.get(self.start, self.INF) == \
-                        self.g.get(self.start, self.INF):
-                    break
-
-    def _extract_path(self):
-        """
-        Follow the greedy gradient from start to goal using current g values.
-        Returns the path as a list of (r,c) tuples, or [] if unreachable.
-        """
-        path = [self.start]
-        current = self.start
-        visited = {self.start}
-        while current != self.goal:
-            nbrs = list(self.maze.passable_neighbours(*current))
-            if not nbrs:
-                return []
-            best_n = min(nbrs, key=lambda s: self.g.get(s, self.INF))
-            if self.g.get(best_n, self.INF) == self.INF:
-                return []   # goal unreachable
-            if best_n in visited:
-                return []   # cycle guard
-            visited.add(best_n)
-            path.append(best_n)
-            current = best_n
-        return path
-
-    def initial_search(self):
-        """
-        Run the initial D* Lite search.
-
-        Returns
-        -------
-        (path, nodes_explored) : tuple
-        """
-        self.nodes_explored = 0
-        self._compute_shortest_path()
-        path = self._extract_path()
-        return path, self.nodes_explored
-
-    def update_obstacles(self, blocked_cells):
-        """
-        Notify D* Lite that a set of cells has been blocked.
-        Marks each cell impassable and calls _update_vertex on affected
-        neighbours so the search tree can be repaired cheaply.
-
-        Parameters
-        ----------
-        blocked_cells : list[(r,c)]
-        """
-        self.k_m += self._h(self.start)   # adjust key modifier
-
-        for cell in blocked_cells:
-            r, c = cell
-            if not (0 <= r < self.maze.rows and 0 <= c < self.maze.cols):
-                continue
-            # Save neighbours before blocking
-            nbrs = list(self.maze.passable_neighbours(r, c))
-            self.maze.block_cell(r, c)
-            self.g[cell]   = self.INF
-            self.rhs[cell] = self.INF
-            # Update affected neighbours
-            for n in nbrs:
-                self._update_vertex(n)
-            self._update_vertex(cell)
-
-    def replan(self):
-        """
-        Replan after obstacles have been added via update_obstacles().
-
-        Returns
-        -------
-        (path, nodes_explored) : tuple
-            nodes_explored counts only the nodes processed during replanning
-            (not the initial search), demonstrating incremental efficiency.
-        """
-        self.nodes_explored = 0
-        self._compute_shortest_path()
-        path = self._extract_path()
-        return path, self.nodes_explored
+    # Extract and yield path
+    path = [start]; cur = start; vis = {start}
+    while cur != end:
+        nbrs = list(maze.passable_neighbours(*cur))
+        if not nbrs: break
+        best_n = min(nbrs, key=lambda s: g.get(s, INF))
+        if g.get(best_n, INF) == INF or best_n in vis: break
+        vis.add(best_n); path.append(best_n); cur = best_n
+    for cell in path: yield ('path', cell)
 
 
-def d_star_lite(maze: Maze):
-    """
-    Convenience wrapper: run initial D* Lite search on a fresh maze.
-    Returns (path, nodes_explored).
-    """
-    ds = DStarLite(maze)
-    return ds.initial_search()
-
-
-# ================================================================
-# ALGORITHM 4 — ALT  (Landmark A* with Triangle Inequality)
-# ================================================================
-
-def alt_landmark_astar(maze: Maze, num_landmarks: int = 8):
-    """
-    ALT — Landmark-based A* using the Triangle Inequality.
-
-    Design Paradigm
-    ---------------
-    Pre-compute exact shortest distances from a small set of "landmark"
-    nodes to every other node using BFS (uniform cost on grid).
-    For any query (s → t), the triangle inequality gives:
-        dist(s, t) ≥ |dist(L, t) − dist(L, s)|
-    for every landmark L.  The maximum over all landmarks is a tighter
-    admissible heuristic than the plain Euclidean distance used by A*,
-    which reduces the number of nodes expanded.
-
-    Optimality
-    ----------
-    The ALT heuristic is admissible (never overestimates) and consistent,
-    so A* with this heuristic is guaranteed to return the optimal path.
-
-    Complexity
-    ----------
-    Preprocessing: O(K · N)  where K = num_landmarks, N = grid cells
-    Query        : O(N log N) worst case, but typically 5–10× fewer
-                   nodes expanded than plain A* due to the better heuristic.
-    Space        : O(K · N)
-
-    Parameters
-    ----------
-    maze          : Maze
-    num_landmarks : int    Number of landmarks to pre-compute (default 8).
-
-    Returns
-    -------
-    path           : list[(r,c)]
-    nodes_explored : int
-    """
+# ----------------------------------------------------------------
+# 4. ALT
+# ----------------------------------------------------------------
+def alt_events(maze: Maze, num_landmarks: int = 8):
+    """ALT — Landmark A* with triangle-inequality heuristic."""
     start, end = maze.start, maze.end
-    if start is None or end is None:
-        return [], 0
+    if start is None or end is None: return
 
-    # ---- Collect all passable cells ----
-    passable = [
-        (r, c)
-        for r in range(maze.rows)
-        for c in range(maze.cols)
-        if maze.mask[r][c]
-    ]
-    if not passable:
-        return [], 0
+    import random as _rnd
+    passable = [(r, c) for r in range(maze.rows)
+                for c in range(maze.cols) if maze.mask[r][c]]
+    if not passable: return
 
-    # ---- Select landmarks by farthest-point sampling ----
-    # Spread landmarks across the maze using iterative farthest-point
-    # selection so they cover the space well.
-    def bfs_distances(source):
-        """Return dict: cell → BFS shortest-path distance from source."""
-        dist  = {source: 0}
-        queue = [source]
-        head  = 0
-        while head < len(queue):
-            node = queue[head]; head += 1
+    def bfs_dist(src):
+        dist = {src: 0}; q = [src]; head = 0
+        while head < len(q):
+            node = q[head]; head += 1
             for nr, nc in maze.passable_neighbours(*node):
                 nb = (nr, nc)
-                if nb not in dist:
-                    dist[nb] = dist[node] + 1
-                    queue.append(nb)
+                if nb not in dist: dist[nb] = dist[node]+1; q.append(nb)
         return dist
 
-    landmarks      = [random.choice(passable)]
-    landmark_dists = [bfs_distances(landmarks[0])]
-
+    landmarks = [_rnd.choice(passable)]; ldists = [bfs_dist(landmarks[0])]
     for _ in range(num_landmarks - 1):
-        # Pick the passable cell farthest from all current landmarks
-        farthest = max(
-            passable,
-            key=lambda cell: min(
-                ld.get(cell, math.inf) for ld in landmark_dists
-            )
-        )
-        landmarks.append(farthest)
-        landmark_dists.append(bfs_distances(farthest))
+        farthest = max(passable,
+                       key=lambda cell: min(ld.get(cell, math.inf) for ld in ldists))
+        landmarks.append(farthest); ldists.append(bfs_dist(farthest))
 
-    # ---- ALT heuristic ----
     def h_alt(s):
-        """
-        Triangle-inequality lower bound on dist(s → end).
-        h(s) = max over all landmarks L of |dist(L,end) − dist(L,s)|
-        """
         best = 0
-        for ld in landmark_dists:
-            d_L_end = ld.get(end,   math.inf)
-            d_L_s   = ld.get(s,     math.inf)
-            if d_L_end < math.inf and d_L_s < math.inf:
-                best = max(best, abs(d_L_end - d_L_s))
+        for ld in ldists:
+            a = ld.get(end, math.inf); b = ld.get(s, math.inf)
+            if a < math.inf and b < math.inf: best = max(best, abs(a - b))
         return best
 
-    # ---- A* with ALT heuristic ----
-    g            = {start: 0}
-    came_from    = {start: None}
-    open_set     = [(h_alt(start), start)]
-    closed       = set()
-    nodes_explored = 0
-
+    g_cost = {start: 0}; came_from = {start: None}
+    open_set = [(h_alt(start), start)]; closed = set()
     while open_set:
         _, s = heapq.heappop(open_set)
-        if s in closed:
-            continue
-        closed.add(s)
-        nodes_explored += 1
-
+        if s in closed: continue
+        closed.add(s); yield ('explore', s)
         if s == end:
-            return reconstruct_path(came_from, start, end), nodes_explored
-
+            for cell in reconstruct_path(came_from, start, end):
+                yield ('path', cell)
+            return
         for nr, nc in maze.passable_neighbours(*s):
-            nb    = (nr, nc)
-            if nb in closed:
-                continue
-            g_new = g[s] + 1
-            if g_new < g.get(nb, math.inf):
-                g[nb]         = g_new
-                came_from[nb] = s
-                heapq.heappush(open_set, (g_new + h_alt(nb), nb))
-
-    return [], nodes_explored
+            nb = (nr, nc)
+            if nb in closed: continue
+            gn = g_cost[s] + 1
+            if gn < g_cost.get(nb, math.inf):
+                g_cost[nb] = gn; came_from[nb] = s
+                heapq.heappush(open_set, (gn + h_alt(nb), nb))
+                yield ('frontier', nb)
 
 
-# ================================================================
-# CSV RESULTS LOGGER
-# ================================================================
+# ----------------------------------------------------------------
+# 5. AHPP — Adaptive Hierarchical Predictive Pathfinding
+# ----------------------------------------------------------------
 
-_results = []   # accumulated; flushed once at end
-
-
-def _log(use_case, algorithm, shape, maze_file,
-         elapsed_sec, path_len_cells, path_len_euclidean,
-         nodes_explored, notes=""):
+class _AHPPVis:
     """
-    Append one result row to the in-memory buffer.
-
-    Parameters
-    ----------
-    use_case           : str
-    algorithm          : str
-    shape              : str   shape name extracted from filename
-    maze_file          : str   filename of the maze
-    elapsed_sec        : float wall-clock search time in seconds
-    path_len_cells     : int   number of cells in the path
-    path_len_euclidean : float true Euclidean length of path
-    nodes_explored     : int
-    notes              : str   optional extra info
+    Stripped-down AHPP that yields visualisation events during pathfinding.
+    Intersection nodes are yielded as 'ahpp_node' (purple).
+    Corridor cells being stitched are yielded as 'ahpp_corridor' (light purple).
+    The final path cells are yielded as 'path' (orange).
     """
-    _results.append({
-        "use_case":           use_case,
-        "algorithm":          algorithm,
-        "shape":              shape,
-        "maze_file":          maze_file,
-        "time_sec":           f"{elapsed_sec:.6f}",
-        "path_len_cells":     path_len_cells,
-        "path_len_euclidean": f"{path_len_euclidean:.4f}",
-        "nodes_explored":     nodes_explored,
-        "notes":              notes,
-    })
+
+    def __init__(self, maze: Maze, block_size: int = 10):
+        self.maze       = maze
+        self.rows       = maze.rows
+        self.cols       = maze.cols
+        self.block_size = block_size
+        self.cell_types, self.constraint_map = self._analyse_maze()
+        self.layer1, self.corridor_cells     = self._build_intersection_graph()
+        self.layer2, self.region_map         = self._build_region_graph()
+
+    def _analyse_maze(self):
+        maze = self.maze; cell_types = {}
+        for r in range(self.rows):
+            for c in range(self.cols):
+                if not maze.mask[r][c]: continue
+                deg = sum(1 for _ in self._neighbours(r, c))
+                if   deg == 0: tp = 'isolated'
+                elif deg == 1: tp = 'dead_end'
+                elif deg == 2: tp = 'corridor'
+                else:          tp = 'intersection'
+                cell_types[(r, c)] = tp
+        constraint = [[0.0]*self.cols for _ in range(self.rows)]
+        for r in range(self.rows):
+            for c in range(self.cols):
+                if not maze.mask[r][c]: continue
+                open_cnt = sum(
+                    1 for dr in range(-2, 3) for dc in range(-2, 3)
+                    if 0 <= r+dr < self.rows and 0 <= c+dc < self.cols
+                    and maze.mask[r+dr][c+dc])
+                constraint[r][c] = (25 - open_cnt) / 25.0
+        return cell_types, constraint
+
+    def _build_intersection_graph(self):
+        maze = self.maze; cell_types = self.cell_types
+        DIRS4 = [(-1,0,1),(0,1,2),(1,0,4),(0,-1,8)]
+        nodes = {pos for pos, tp in cell_types.items()
+                 if tp in ('intersection', 'dead_end')}
+        graph = {n: [] for n in nodes}; corridor_cells = {}
+        for node in nodes:
+            r, c = node
+            for dr, dc, bit in DIRS4:
+                if not (maze.grid[r][c] & bit): continue
+                nr, nc = r+dr, c+dc
+                if not maze.is_passable(nr, nc): continue
+                prev_r, prev_c = r, c; cur_r, cur_c = nr, nc; cells = []
+                while True:
+                    if (cur_r, cur_c) in nodes:
+                        nb = (cur_r, cur_c)
+                        if not any(n == nb for n, _ in graph[node]):
+                            length = len(cells) + 1
+                            graph[node].append((nb, length))
+                            graph[nb].append((node, length))
+                            corridor_cells[(node, nb)] = list(cells)
+                            corridor_cells[(nb, node)] = list(reversed(cells))
+                        break
+                    next_cells = [
+                        (cur_r+ndr, cur_c+ndc)
+                        for ndr, ndc in [(-1,0),(1,0),(0,1),(0,-1)]
+                        if maze.is_passable(cur_r+ndr, cur_c+ndc)
+                        and (cur_r+ndr, cur_c+ndc) != (prev_r, prev_c)]
+                    if not next_cells: break
+                    cells.append((cur_r, cur_c))
+                    prev_r, prev_c = cur_r, cur_c
+                    cur_r, cur_c   = next_cells[0]
+        return graph, corridor_cells
+
+    def _build_region_graph(self):
+        maze = self.maze; rows, cols = self.rows, self.cols
+        bs = self.block_size
+        br = math.ceil(rows / bs); bc = math.ceil(cols / bs)
+        region_map = [[(0,0)]*cols for _ in range(rows)]
+        for i in range(br):
+            for j in range(bc):
+                for r in range(i*bs, min(rows, (i+1)*bs)):
+                    for c in range(j*bs, min(cols, (j+1)*bs)):
+                        region_map[r][c] = (i, j)
+        adj = {(i,j): [] for i in range(br) for j in range(bc)}
+        for i in range(br):
+            for j in range(bc - 1):
+                for r in range(i*bs, min(rows, (i+1)*bs)):
+                    c_l = (j+1)*bs - 1; c_r = c_l + 1
+                    if (c_r < cols and maze.mask[r][c_l]
+                            and maze.mask[r][c_r] and maze.grid[r][c_l] & 2):
+                        adj[(i,j)].append(((i,j+1), bs))
+                        adj[(i,j+1)].append(((i,j), bs)); break
+        for i in range(br - 1):
+            for j in range(bc):
+                for c in range(j*bs, min(cols, (j+1)*bs)):
+                    r_b = (i+1)*bs - 1; r_t = r_b + 1
+                    if (r_t < rows and maze.mask[r_b][c]
+                            and maze.mask[r_t][c] and maze.grid[r_b][c] & 4):
+                        adj[(i,j)].append(((i+1,j), bs))
+                        adj[(i+1,j)].append(((i,j), bs)); break
+        return adj, region_map
+
+    def find_path_events(self, start=None, goal=None):
+        """
+        Generator — yields (event_type, cell) events during pathfinding.
+        ahpp_node    → intersection / dead-end node visited during Layer-1 A*
+        ahpp_corridor → cell being stitched from a pre-stored corridor
+        path          → final path cell
+        """
+        if start is None: start = self.maze.start
+        if goal  is None: goal  = self.maze.end
+        if start is None or goal is None: return
+
+        sr, sc = start; gr, gc = goal
+        if (sr, sc) == (gr, gc):
+            yield ('path', start); return
+
+        start_node = self._nearest_node(sr, sc)
+        goal_node  = self._nearest_node(gr, gc)
+
+        # Yield intersection nodes as they are identified
+        yield ('ahpp_node', start_node)
+        yield ('ahpp_node', goal_node)
+
+        if start_node == goal_node:
+            path, _ = self._trace_corridor_between(start, goal)
+            if path:
+                for cell in path: yield ('path', cell)
+            return
+
+        # Layer 2 — region A*
+        start_reg = self.region_map[sr][sc]
+        goal_reg  = self.region_map[gr][gc]
+        reg_path, _ = self._a_star_region(start_reg, goal_reg)
+        if reg_path is None: return
+
+        # Layer 1 — intersection A* (yield nodes as explored)
+        allowed  = set(reg_path)
+        int_path, _ = self._a_star_intersections_events(
+            start_node, goal_node, allowed)
+        if int_path is None: return
+
+        # Stitch full path — yield corridor cells as ahpp_corridor
+        full_path = []
+        if (sr, sc) != start_node:
+            seg, _ = self._trace_corridor_between(start, start_node)
+            if seg is None: return
+            for cell in seg[:-1]:
+                yield ('ahpp_corridor', cell)
+            full_path.extend(seg[:-1])
+
+        for i in range(len(int_path) - 1):
+            a = int_path[i]; b = int_path[i+1]
+            if i == 0 and (sr, sc) == start_node:
+                full_path.append(a)
+            corridor = self.corridor_cells.get((a, b), [])
+            for cell in corridor:
+                yield ('ahpp_corridor', cell)
+            full_path.extend(corridor)
+            full_path.append(b)
+
+        if (gr, gc) != goal_node:
+            seg, _ = self._trace_corridor_between(goal_node, goal)
+            if seg is None: return
+            for cell in seg[1:]:
+                yield ('ahpp_corridor', cell)
+            full_path.extend(seg[1:])
+
+        # Smooth and yield final path
+        smoothed = self._smooth_path(full_path)
+        for cell in smoothed: yield ('path', cell)
+
+    def _a_star_region(self, start_reg, goal_reg):
+        if start_reg == goal_reg: return [start_reg], 1
+        gi, gj = goal_reg; bs = self.block_size
+        def h(reg): return math.hypot(reg[0]-gi, reg[1]-gj) * bs
+        open_set = [(h(start_reg), 0, start_reg, [start_reg])]
+        visited = set(); explored = 0
+        while open_set:
+            f, g, node, path = heapq.heappop(open_set)
+            if node in visited: continue
+            visited.add(node); explored += 1
+            if node == goal_reg: return path, explored
+            for nb, w in self.layer2[node]:
+                if nb not in visited:
+                    ng = g + w
+                    heapq.heappush(open_set, (ng+h(nb), ng, nb, path+[nb]))
+        return None, explored
+
+    def _a_star_intersections_events(self, start_node, goal_node, allowed):
+        """A* on intersection graph — also yields ahpp_node events."""
+        if start_node == goal_node: return [start_node], 1
+        gr, gc = goal_node
+        def h(node): return math.hypot(node[0]-gr, node[1]-gc)
+        open_set = [(h(start_node), 0, start_node, [start_node])]
+        visited = set(); explored = 0
+        # We collect events inside and return path; caller yields them
+        while open_set:
+            f, g, node, path = heapq.heappop(open_set)
+            if node in visited: continue
+            visited.add(node); explored += 1
+            if node == goal_node: return path, explored
+            for nb, w in self.layer1[node]:
+                if nb in visited: continue
+                nr, nc = nb
+                if self.region_map[nr][nc] not in allowed: continue
+                ng = g + w
+                heapq.heappush(open_set, (ng+h(nb), ng, nb, path+[nb]))
+        return None, explored
+
+    def _trace_corridor_between(self, a, b):
+        if a == b: return [a], 1
+        prev = {a: None}; q = deque([a]); visited = {a}
+        while q:
+            cur = q.popleft()
+            if cur == b: break
+            for nr, nc in self._neighbours(cur[0], cur[1]):
+                if (nr, nc) not in visited:
+                    visited.add((nr, nc)); prev[(nr, nc)] = cur; q.append((nr, nc))
+        if b not in prev: return None, len(visited)
+        path = []; node = b
+        while node is not None: path.append(node); node = prev[node]
+        path.reverse(); return path, len(visited)
+
+    def _smooth_path(self, path):
+        if len(path) <= 2: return path
+        smoothed = [path[0]]; i = 0
+        while i < len(path) - 1:
+            j = len(path) - 1
+            while j > i+1 and not self._los(path[i], path[j]): j -= 1
+            smoothed.append(path[j]); i = j
+        return smoothed
+
+    def _los(self, a, b):
+        r1, c1 = a; r2, c2 = b
+        steps = max(abs(r2-r1), abs(c2-c1))
+        if steps == 0: return True
+        r, c = r1, c1
+        for _ in range(steps):
+            if r < r2: r += 1
+            elif r > r2: r -= 1
+            if c < c2: c += 1
+            elif c > c2: c -= 1
+            if not self.maze.mask[r][c]: return False
+        return True
+
+    def _neighbours(self, r, c):
+        maze = self.maze; res = []
+        for dr, dc, bit in [(-1,0,1),(0,1,2),(1,0,4),(0,-1,8)]:
+            if maze.grid[r][c] & bit:
+                nr, nc = r+dr, c+dc
+                if maze.is_passable(nr, nc): res.append((nr, nc))
+        return res
+
+    def _nearest_node(self, r, c):
+        if self.cell_types.get((r,c)) in ('intersection', 'dead_end'):
+            return (r, c)
+        visited = {(r,c)}; q = deque([(r,c)])
+        while q:
+            cr, cc = q.popleft()
+            for nr, nc in self._neighbours(cr, cc):
+                if (nr,nc) not in visited:
+                    if self.cell_types.get((nr,nc)) in ('intersection','dead_end'):
+                        return (nr, nc)
+                    visited.add((nr,nc)); q.append((nr,nc))
+        return (r, c)
 
 
-def _flush_results():
-    """Write all buffered result rows to pathfinding_results.csv."""
-    fieldnames = [
-        "use_case", "algorithm", "shape", "maze_file",
-        "time_sec", "path_len_cells", "path_len_euclidean",
-        "nodes_explored", "notes",
-    ]
-    with open(RESULTS_CSV, "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=fieldnames)
-        w.writeheader()
-        w.writerows(_results)
-    print(f"\n[CSV] Results saved → {RESULTS_CSV}  ({len(_results)} rows)")
-
-
-def fmt_time(sec):
-    """Format seconds as µs / ms / s."""
-    if sec < 1e-3: return f"{sec * 1e6:.1f}µs"
-    if sec < 1:    return f"{sec * 1e3:.1f}ms"
-    return f"{sec:.3f}s"
-
-
-# ================================================================
-# LOAD BEST MAZES
-# ================================================================
-
-def load_best_mazes():
+def ahpp_events(maze: Maze):
     """
-    Scan BEST_DIR for .maze files and return a list of
-    (shape_name, maze_path, Maze) tuples sorted by shape name.
-
-    Returns
-    -------
-    list of (shape_name: str, filepath: Path, maze: Maze)
+    AHPP events generator.
+    Builds the hierarchy then yields search + path events for animation.
+    Uses distinct colours:
+        ahpp_node     → purple  (intersection / dead-end nodes visited)
+        ahpp_corridor → light purple  (corridor cells stitched together)
+        path          → orange  (final smoothed path)
     """
-    mazes = []
-    if not BEST_DIR.exists():
-        print(f"[ERROR] best_mazes directory not found: {BEST_DIR}")
-        print("        Run maze_benchmark.py first to generate the best mazes.")
-        return mazes
-
-    for fp in sorted(BEST_DIR.glob("BEST_*.maze")):
-        # Filename format: BEST_<Shape>_100x100_<Algo>.maze
-        stem   = fp.stem                   # e.g. BEST_Circle_100x100_Kruskal
-        parts  = stem.split("_")
-        if len(parts) < 2:
-            continue
-        shape  = parts[1]                  # e.g. Circle
-        maze   = Maze.from_file(str(fp))
-        mazes.append((shape, fp, maze))
-        print(f"  Loaded {fp.name}  (start={maze.start}, end={maze.end})")
-
-    return mazes
+    vis = _AHPPVis(maze)
+    yield from vis.find_path_events(maze.start, maze.end)
 
 
 # ================================================================
-# ALGORITHM REGISTRY
+# ALGORITHM EVENT GENERATORS REGISTRY
 # ================================================================
 
-ALGORITHMS = {
-    "ThetaStar":              theta_star,
-    "BidirectionalDijkstra":  bidirectional_dijkstra,
-    "DStarLite":              d_star_lite,
-    "ALT":                    alt_landmark_astar,
+ALGO_EVENTS = {
+    "ThetaStar":             theta_star_events,
+    "BidirectionalDijkstra": bidirectional_dijkstra_events,
+    "DStarLite":             d_star_lite_events,
+    "ALT":                   alt_events,
+    "AHPP":                  ahpp_events,          # [ADDED]
 }
 
 
 # ================================================================
-# MAIN BENCHMARK
+# FRAME RENDERER
+# ================================================================
+
+class MazeRenderer:
+    """
+    Renders maze frames as PIL Images.
+    Tracks a per-cell colour dict that is updated as search events arrive.
+    """
+
+    def __init__(self, maze: Maze, cell_size: int = 6, wall_width: int = 1):
+        self.maze = maze
+        self.cs   = cell_size
+        self.ww   = max(1, wall_width)
+        self.img_w = maze.cols * cell_size + self.ww
+        self.img_h = maze.rows * cell_size + self.ww
+        self.colours = {}   # (r,c) → RGB
+
+    def _base_image(self) -> Image.Image:
+        """Draw maze walls on a white background; non-mask cells filled black."""
+        img  = Image.new("RGB", (self.img_w, self.img_h), COL_BG)
+        draw = ImageDraw.Draw(img)
+
+        # Fill outside cells
+        for r in range(self.maze.rows):
+            for c in range(self.maze.cols):
+                if not self.maze.mask[r][c]:
+                    x1 = c * self.cs; y1 = r * self.cs
+                    draw.rectangle([x1, y1,
+                                     x1 + self.cs + self.ww,
+                                     y1 + self.cs + self.ww],
+                                    fill=COL_OUTSIDE)
+
+        # Draw walls
+        for r in range(self.maze.rows):
+            for c in range(self.maze.cols):
+                if not self.maze.mask[r][c]: continue
+                x1 = c*self.cs; y1 = r*self.cs
+                x2 = x1+self.cs; y2 = y1+self.cs; wh = self.ww
+                nr2 = r - 1
+                if not (self.maze.in_bounds(nr2, c)
+                        and self.maze.mask[nr2][c]
+                        and self.maze.grid[r][c] & self.maze.N):
+                    draw.line([(x1,y1),(x2,y1)], fill=COL_WALL, width=wh)
+                sr2 = r + 1
+                if not (self.maze.in_bounds(sr2, c)
+                        and self.maze.mask[sr2][c]
+                        and self.maze.grid[r][c] & self.maze.S):
+                    draw.line([(x1,y2),(x2,y2)], fill=COL_WALL, width=wh)
+                wc2 = c - 1
+                if not (self.maze.in_bounds(r, wc2)
+                        and self.maze.mask[r][wc2]
+                        and self.maze.grid[r][c] & self.maze.W):
+                    draw.line([(x1,y1),(x1,y2)], fill=COL_WALL, width=wh)
+                ec2 = c + 1
+                if not (self.maze.in_bounds(r, ec2)
+                        and self.maze.mask[r][ec2]
+                        and self.maze.grid[r][c] & self.maze.E):
+                    draw.line([(x2,y1),(x2,y2)], fill=COL_WALL, width=wh)
+        return img
+
+    def render(self, highlight_path=None) -> Image.Image:
+        """
+        Composite the current colour overlay onto the base maze image.
+
+        Parameters
+        ----------
+        highlight_path : list[(r,c)] | None
+            If given, these cells are drawn in COL_PATH on top of everything.
+        """
+        img  = self._base_image()
+        draw = ImageDraw.Draw(img)
+        dot  = max(1, self.cs // 3)
+
+        # Cell colour overlay
+        for (r, c), col in self.colours.items():
+            x1 = c*self.cs + self.ww; y1 = r*self.cs + self.ww
+            x2 = x1 + self.cs - self.ww; y2 = y1 + self.cs - self.ww
+            draw.rectangle([x1, y1, x2, y2], fill=col)
+
+        # Path overlay
+        if highlight_path:
+            for r, c in highlight_path:
+                x1 = c*self.cs + self.ww; y1 = r*self.cs + self.ww
+                x2 = x1 + self.cs - self.ww; y2 = y1 + self.cs - self.ww
+                draw.rectangle([x1, y1, x2, y2], fill=COL_PATH)
+
+        # Start / end dots always on top
+        if self.maze.start:
+            sr, sc = self.maze.start
+            cx_s = sc*self.cs + self.cs//2; cy_s = sr*self.cs + self.cs//2
+            draw.ellipse([cx_s-dot, cy_s-dot, cx_s+dot, cy_s+dot], fill=COL_START)
+        if self.maze.end:
+            er, ec = self.maze.end
+            cx_e = ec*self.cs + self.cs//2; cy_e = er*self.cs + self.cs//2
+            draw.ellipse([cx_e-dot, cy_e-dot, cx_e+dot, cy_e+dot], fill=COL_END)
+
+        return img
+
+
+# ================================================================
+# GIF BUILDER
+# ================================================================
+
+# Map event type → cell colour
+_EVENT_COLOUR = {
+    'explore':       COL_EXPLORED,
+    'frontier':      COL_FRONTIER,
+    'ahpp_node':     COL_AHPP_NODE,
+    'ahpp_corridor': COL_AHPP_CORRIDOR,
+}
+
+
+def build_animation(maze: Maze, events_fn,
+                    cell_size: int = 6,
+                    fps: int = 20,
+                    cells_per_frame: int = 5) -> list:
+    """
+    Drive an instrumented algorithm generator and capture PIL Image frames.
+
+    Strategy
+    --------
+    Collect all events first, then replay them into frames so we can
+    batch *cells_per_frame* events per frame for a reasonable GIF size.
+
+    Parameters
+    ----------
+    maze            : Maze
+    events_fn       : generator function  (one of ALGO_EVENTS.values())
+    cell_size       : int
+    fps             : int
+    cells_per_frame : int   Higher → fewer frames → smaller file.
+
+    Returns
+    -------
+    list[PIL.Image.Image]
+    """
+    renderer = MazeRenderer(maze, cell_size=cell_size)
+    frames   = []
+    path     = []
+    non_path_events = []   # (event_type, cell)
+
+    # Collect all events
+    for event_type, cell in events_fn(maze):
+        if event_type == 'path':
+            path.append(cell)
+        else:
+            non_path_events.append((event_type, cell))
+
+    # Frame 0: blank maze
+    frames.append(renderer.render())
+
+    # Build exploration frames
+    batch = []
+    for event_type, cell in non_path_events:
+        col = _EVENT_COLOUR.get(event_type, COL_EXPLORED)
+        renderer.colours[cell] = col
+        batch.append(cell)
+        if len(batch) >= cells_per_frame:
+            frames.append(renderer.render()); batch = []
+    if batch:
+        frames.append(renderer.render())
+
+    # Hold final frame (path in orange) for ~fps//4 extra frames
+    hold = max(1, fps // 4)
+    for _ in range(hold):
+        frames.append(renderer.render(highlight_path=path))
+
+    return frames
+
+
+def save_gif(frames: list, out_path: Path, fps: int = 20):
+    """Save a list of PIL Images as an animated GIF."""
+    if not frames:
+        print(f"  [WARN] No frames for {out_path.name} — skipping.")
+        return
+    duration_ms = max(20, 1000 // fps)
+    palette_frames = [f.convert("P", palette=Image.ADAPTIVE, colors=256)
+                      for f in frames]
+    palette_frames[0].save(
+        str(out_path),
+        save_all=True,
+        append_images=palette_frames[1:],
+        duration=duration_ms,
+        loop=0,
+        optimize=False,
+    )
+    size_kb = out_path.stat().st_size // 1024
+    print(f"  Saved {out_path.name}  ({len(frames)} frames, ~{size_kb} KB)")
+
+
+# ================================================================
+# MAIN
 # ================================================================
 
 def main():
-    """
-    Run all four use cases and write results to pathfinding_results.csv.
+    """Generate one animated GIF per (algorithm × shape) combination."""
+    parser = argparse.ArgumentParser(
+        description="Pathfinding animation generator")
+    parser.add_argument("--cell", type=int, default=6,
+                        help="Pixel size per maze cell (default 6)")
+    parser.add_argument("--fps",  type=int, default=20,
+                        help="Frames per second (default 20)")
+    parser.add_argument("--skip", type=int, default=5,
+                        help="Explored cells batched per frame (default 5)")
+    args = parser.parse_args()
 
-    Use Cases
-    ---------
-    UC1 — Basic Pathfinding       : time + path length + nodes per maze/algo
-    UC2 — Path Quality            : cells vs Euclidean path length (Theta* advantage)
-    UC3 — Nodes Explored          : search efficiency across shapes
-    UC4 — Dynamic Replanning      : D* Lite replan vs fresh A* after obstacles
-    """
-    print("\n" + "=" * 80)
-    print(" PATHFINDING BENCHMARK")
-    print("=" * 80)
+    print("\n" + "=" * 70)
+    print(" PATHFINDING VISUALISER")
+    print("=" * 70)
+    print(f"Settings : cell={args.cell}px  fps={args.fps}  "
+          f"cells_per_frame={args.skip}")
+    print(f"Output   : {ANIM_DIR}")
+    print(f"Algorithms: {', '.join(ALGO_EVENTS)}")
 
-    print("\nLoading best mazes from:", BEST_DIR)
-    best_mazes = load_best_mazes()
-    if not best_mazes:
+    if not BEST_DIR.exists():
+        print(f"\n[ERROR] best_mazes directory not found:\n  {BEST_DIR}")
+        print("Run maze_benchmark.py first.")
         return
 
-    # ================================================================
-    # USE CASE 1 — BASIC PATHFINDING
-    # ================================================================
-    print("\n" + "=" * 80)
-    print("USE CASE 1: BASIC PATHFINDING")
-    print("Metric: wall-clock time, path length (cells), nodes explored")
-    print("=" * 80)
+    maze_files = sorted(BEST_DIR.glob("BEST_*.maze"))
+    if not maze_files:
+        print(f"\n[ERROR] No BEST_*.maze files found in {BEST_DIR}")
+        return
 
-    hdr = (f"{'Algorithm':<26} {'Shape':<12} {'Time':>10} "
-           f"{'Path(cells)':>12} {'Nodes':>10}")
-    print(hdr)
-    print("-" * len(hdr))
+    print(f"\nFound {len(maze_files)} best maze(s).")
+    total = len(maze_files) * len(ALGO_EVENTS)
+    done  = 0
 
-    for shape, fp, maze in best_mazes:
-        for alg_name, alg_fn in ALGORITHMS.items():
-            # Deep-copy the grid so blocking in UC4 doesn't affect UC1
-            import copy
-            m = copy.deepcopy(maze)
-            t0      = time.perf_counter()
-            path, nodes = alg_fn(m)
-            elapsed = time.perf_counter() - t0
+    for fp in maze_files:
+        stem  = fp.stem; parts = stem.split("_")
+        shape = parts[1] if len(parts) > 1 else "Unknown"
+        print(f"\n── {fp.name}  (shape: {shape})")
 
-            cells   = len(path)
-            euc     = path_euclidean_length(path)
+        for alg_name, events_fn in ALGO_EVENTS.items():
+            done += 1
+            print(f"   [{done}/{total}] {alg_name}...", end=" ", flush=True)
 
-            _log("UC1_BasicPathfinding", alg_name, shape, fp.name,
-                 elapsed, cells, euc, nodes)
-            print(f"{alg_name:<26} {shape:<12} {fmt_time(elapsed):>10} "
-                  f"{cells:>12} {nodes:>10}")
-        print()
+            maze = copy.deepcopy(Maze.from_file(str(fp)))
+            if maze.start is None or maze.end is None:
+                print("SKIP (no start/end)"); continue
 
-    # ================================================================
-    # USE CASE 2 — PATH QUALITY
-    # ================================================================
-    print("=" * 80)
-    print("USE CASE 2: PATH QUALITY")
-    print("Metric: path length in cells vs true Euclidean distance")
-    print("(Theta* finds shorter Euclidean paths by cutting corners)")
-    print("=" * 80)
+            frames = build_animation(
+                maze, events_fn,
+                cell_size=args.cell,
+                fps=args.fps,
+                cells_per_frame=args.skip,
+            )
+            out_path = ANIM_DIR / f"{alg_name}_{shape}.gif"
+            save_gif(frames, out_path, fps=args.fps)
 
-    hdr = (f"{'Algorithm':<26} {'Shape':<12} {'Cells':>8} "
-           f"{'Euclidean':>12} {'Cell/Euc ratio':>16}")
-    print(hdr)
-    print("-" * len(hdr))
-
-    for shape, fp, maze in best_mazes:
-        for alg_name, alg_fn in ALGORITHMS.items():
-            import copy
-            m = copy.deepcopy(maze)
-            t0      = time.perf_counter()
-            path, nodes = alg_fn(m)
-            elapsed = time.perf_counter() - t0
-
-            cells = len(path)
-            euc   = path_euclidean_length(path)
-            ratio = (cells / euc) if euc > 0 else 0.0
-
-            _log("UC2_PathQuality", alg_name, shape, fp.name,
-                 elapsed, cells, euc, nodes,
-                 notes=f"cell_euc_ratio={ratio:.3f}")
-            print(f"{alg_name:<26} {shape:<12} {cells:>8} "
-                  f"{euc:>12.2f} {ratio:>16.3f}")
-        print()
-
-    # ================================================================
-    # USE CASE 3 — NODES EXPLORED
-    # ================================================================
-    print("=" * 80)
-    print("USE CASE 3: NODES EXPLORED (search efficiency)")
-    print("Metric: how many cells visited before solution found")
-    print("Lower = more efficient heuristic guidance")
-    print("=" * 80)
-
-    hdr = (f"{'Algorithm':<26} {'Shape':<12} {'Nodes':>10} "
-           f"{'% of grid':>12} {'Path cells':>12}")
-    print(hdr)
-    print("-" * len(hdr))
-
-    passable_counts = {}
-    for shape, fp, maze in best_mazes:
-        passable_counts[shape] = sum(
-            row.count(True) for row in maze.mask)
-
-    for shape, fp, maze in best_mazes:
-        total_passable = passable_counts[shape]
-        for alg_name, alg_fn in ALGORITHMS.items():
-            import copy
-            m = copy.deepcopy(maze)
-            t0      = time.perf_counter()
-            path, nodes = alg_fn(m)
-            elapsed = time.perf_counter() - t0
-
-            cells     = len(path)
-            euc       = path_euclidean_length(path)
-            pct_grid  = (nodes / total_passable * 100) if total_passable else 0
-
-            _log("UC3_NodesExplored", alg_name, shape, fp.name,
-                 elapsed, cells, euc, nodes,
-                 notes=f"pct_grid={pct_grid:.1f}%")
-            print(f"{alg_name:<26} {shape:<12} {nodes:>10} "
-                  f"{pct_grid:>11.1f}% {cells:>12}")
-        print()
-
-    # ================================================================
-    # USE CASE 4 — DYNAMIC REPLANNING  (D* Lite vs fresh A*)
-    # ================================================================
-    print("=" * 80)
-    print("USE CASE 4: DYNAMIC REPLANNING")
-    print("D* Lite replan after 3 obstacles added  vs  fresh A* from scratch")
-    print("Demonstrates incremental search advantage")
-    print("=" * 80)
-
-    hdr = (f"{'Shape':<12} {'Method':<30} {'Time':>10} "
-           f"{'Nodes':>10} {'Path':>8} {'Speedup':>10}")
-    print(hdr)
-    print("-" * 76)
-
-    for shape, fp, maze in best_mazes:
-        import copy
-
-        # ---- Initial D* Lite search ----
-        m_dstar = copy.deepcopy(maze)
-        ds      = DStarLite(m_dstar)
-        t0      = time.perf_counter()
-        path_init, nodes_init = ds.initial_search()
-        t_init  = time.perf_counter() - t0
-
-        _log("UC4_DynamicReplanning", "DStarLite_Initial", shape, fp.name,
-             t_init, len(path_init), path_euclidean_length(path_init),
-             nodes_init, notes="initial_search")
-
-        print(f"{shape:<12} {'D*Lite initial':<30} {fmt_time(t_init):>10} "
-              f"{nodes_init:>10} {len(path_init):>8}        —")
-
-        if len(path_init) < 6:
-            print(f"{shape:<12} {'(path too short to block 3 cells)':<30}")
-            print()
-            continue
-
-        # Choose 3 cells on the path to block (avoid start/end)
-        block_candidates = path_init[2: len(path_init) - 2]
-        block_cells      = random.sample(
-            block_candidates, min(3, len(block_candidates)))
-
-        # ---- D* Lite replan ----
-        ds.update_obstacles(block_cells)
-        t0           = time.perf_counter()
-        path_replan, nodes_replan = ds.replan()
-        t_replan     = time.perf_counter() - t0
-
-        euc_replan = path_euclidean_length(path_replan)
-        _log("UC4_DynamicReplanning", "DStarLite_Replan", shape, fp.name,
-             t_replan, len(path_replan), euc_replan, nodes_replan,
-             notes=f"blocked={block_cells}")
-
-        print(f"{shape:<12} {'D*Lite replan':<30} {fmt_time(t_replan):>10} "
-              f"{nodes_replan:>10} {len(path_replan):>8}        —")
-
-        # ---- Fresh A* on the same blocked maze ----
-        m_astar = copy.deepcopy(maze)
-        for r, c in block_cells:
-            m_astar.block_cell(r, c)
-
-        # A* (plain, for comparison baseline)
-        def astar_baseline(m):
-            """Standard A* with Euclidean heuristic — comparison baseline."""
-            s, e = m.start, m.end
-            if s is None or e is None:
-                return [], 0
-            g          = {s: 0}
-            cf         = {s: None}
-            oset       = [(euclidean(*s, *e), s)]
-            closed     = set()
-            ne         = 0
-            while oset:
-                _, u = heapq.heappop(oset)
-                if u in closed:
-                    continue
-                closed.add(u); ne += 1
-                if u == e:
-                    return reconstruct_path(cf, s, e), ne
-                for nr2, nc2 in m.passable_neighbours(*u):
-                    v     = (nr2, nc2)
-                    if v in closed:
-                        continue
-                    gn    = g[u] + 1
-                    if gn < g.get(v, math.inf):
-                        g[v] = gn; cf[v] = u
-                        heapq.heappush(oset, (gn + euclidean(*v, *e), v))
-            return [], ne
-
-        t0            = time.perf_counter()
-        path_astar, nodes_astar = astar_baseline(m_astar)
-        t_astar       = time.perf_counter() - t0
-
-        speedup = t_astar / t_replan if t_replan > 0 else float('inf')
-        _log("UC4_DynamicReplanning", "AStar_FreshSearch", shape, fp.name,
-             t_astar, len(path_astar), path_euclidean_length(path_astar),
-             nodes_astar, notes=f"blocked={block_cells}")
-
-        print(f"{shape:<12} {'A* fresh search':<30} {fmt_time(t_astar):>10} "
-              f"{nodes_astar:>10} {len(path_astar):>8} {speedup:>9.2f}×")
-        print()
-
-    # ================================================================
-    # FLUSH CSV
-    # ================================================================
-    _flush_results()
-    print("\nBenchmark complete.")
+    print("\n" + "=" * 70)
+    print(f"All {done} animations saved to: {ANIM_DIR}")
+    print("=" * 70)
 
 
 if __name__ == "__main__":
