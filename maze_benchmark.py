@@ -1,8 +1,8 @@
 """
 maze_benchmark.py
 =================
-DAA Project — Maze Generation Benchmark
-Authors : (your group names here)
+Maze Generation Benchmark
+Authors : Hamna Sajid, Izza Sohail
 Course  : CSE 317 – Design and Analysis of Algorithms, Spring 2026
 
 Overview
@@ -87,7 +87,6 @@ class Maze:
             self.mask = [[True] * cols for _ in range(rows)]
         else:
             self.mask = mask
-        # [ADDED] start / end are set by assign_start_end() after generation
         self.start = None
         self.end   = None
 
@@ -158,7 +157,6 @@ class Maze:
         Line 2  : "start=<r>,<c> end=<r>,<c>"  (-1,-1 when unset)
         Lines 3+: "<mask_row> | <grid_row>"  (space-separated integers)
         """
-        # [ADDED] write start/end so pathfinding stage can read them directly
         sr, sc = self.start if self.start else (-1, -1)
         er, ec = self.end   if self.end   else (-1, -1)
         with open(filename, 'w') as f:
@@ -177,7 +175,6 @@ class Maze:
         """
         with open(filename) as f:
             rows, cols = map(int, f.readline().split())
-            # [ADDED] read start/end if present
             start = end = None
             line2 = f.readline().strip()
             if line2.startswith('start='):
@@ -188,7 +185,6 @@ class Maze:
                 end    = (er, ec) if er >= 0 else None
                 data_lines = [f.readline() for _ in range(rows)]
             else:
-                # old format — line2 is the first data row
                 data_lines = [line2] + [f.readline() for _ in range(rows - 1)]
 
             mask = [[True]  * cols for _ in range(rows)]
@@ -212,7 +208,7 @@ class Maze:
 
 
 # ================================================================
-#  [ADDED] START / END ASSIGNMENT
+#  START / END ASSIGNMENT
 # ================================================================
 
 def assign_start_end(maze):
@@ -401,7 +397,7 @@ def maze_to_image(maze, cell_size=10, wall_width=2):
     draw.line([(0, height - 1), (width - 1, height - 1)], fill="black", width=wall_width)
     draw.line([(width - 1, 0), (width - 1, height - 1)], fill="black", width=wall_width)
 
-    # [ADDED] Draw start (green) and end (red) dots
+    # Draw start (green) and end (red) dots
     dot_r = max(2, cell_size // 3)
     if maze.start:
         sr, sc = maze.start
@@ -433,7 +429,6 @@ def smart_cell_size(total_cells):
 
 OUTPUT_DIR = "mazes_for_pathfinding"
 IMAGE_DIR  = os.path.join(OUTPUT_DIR, "images")
-# [ADDED] separate folder for the six best mazes (one per shape)
 BEST_DIR   = os.path.join(OUTPUT_DIR, "best_mazes")
 os.makedirs(IMAGE_DIR, exist_ok=True)
 os.makedirs(BEST_DIR,  exist_ok=True)
@@ -546,7 +541,6 @@ def recursive_backtracker(rows, cols, seed=None, mask=None):
                 break
         if not carved:
             stack.pop()
-    # [ADDED] assign start and end after generation
     assign_start_end(maze)
     return maze
 
@@ -593,7 +587,6 @@ def prim_randomized(rows, cols, seed=None, mask=None):
                 nnr, nnc = nr + DX[nd], nc + DY[nd]
                 if maze.is_passable(nnr, nnc) and not visited[nnr][nnc]:
                     walls.append((nr, nc, nd))
-    # [ADDED]
     assign_start_end(maze)
     return maze
 
@@ -660,7 +653,6 @@ def kruskal_randomized(rows, cols, seed=None, mask=None):
         nr, nc = r + DX[d], c + DY[d]
         if union(r * cols + c, nr * cols + nc):
             maze.carve(r, c, d)
-    # [ADDED]
     assign_start_end(maze)
     return maze
 
@@ -736,7 +728,6 @@ def eller(rows, cols, seed=None, mask=None):
                 next_row_set[c] = next_id
                 next_id        += 1
         row_set = next_row_set
-    # [ADDED]
     assign_start_end(maze)
     return maze
 
@@ -794,7 +785,6 @@ def wilson(rows, cols, seed=None, mask=None):
             in_maze[r1][c1] = True
         in_maze[path[-1][0]][path[-1][1]] = True
         remaining = [(r, c) for r, c in passable if not in_maze[r][c]]
-    # [ADDED]
     assign_start_end(maze)
     return maze
 
@@ -811,7 +801,6 @@ ALGORITHMS = {
     "Wilson":      wilson,
 }
 
-# [ADDED] CSV path and in-memory buffer — flushed once at end of main()
 CSV_PATH  = os.path.join(OUTPUT_DIR, "benchmark_times.csv")
 _csv_rows = []
 
@@ -893,7 +882,7 @@ def fmt_time(sec):
 
 
 # ================================================================
-#  [ADDED] BEST MAZE SELECTION
+#  BEST MAZE SELECTION
 # ================================================================
 
 def select_and_save_best_mazes(shape_timing):
@@ -980,7 +969,8 @@ def main(show_viewer=True):
 
     Use Cases
     ---------
-    UC1 — Size Scaling      : Rectangle, 10×10 → 500×500
+    UC1 — Size Scaling      : ALL shapes, sizes 10×10 → 500×500
+                              .maze and .png saved for every combination
     UC2 — Aspect Ratio      : Square / Wide / Tall / Very-Thin rectangles
     UC3 — Structure Metrics : Dead-end % and average branch factor, 100×100
     UC4 — Memory Efficiency : Peak heap allocation, 100×100
@@ -988,50 +978,68 @@ def main(show_viewer=True):
                               selection)
 
     After all use cases:
-    * Flush timing data to benchmark_times.csv           [ADDED]
-    * Select and save best maze per shape to best_mazes/ [ADDED]
+    * Flush timing data to benchmark_times.csv
+    * Select and save best maze per shape to best_mazes/
     * Print ASCII sample maze
     * (Optionally) launch interactive ASCII viewer
     """
-    # Wilson is skipped on large grids (O(N²) cover time)
     SKIP_WILSON_LARGE = True
     viewable_sizes    = [(10, 10), (25, 25), (50, 50)]
     maze_collection   = {alg: {} for alg in ALGORITHMS}
-
-    # [ADDED] shape_timing[shape][alg] = (maze, elapsed) — populated in UC5
-    shape_timing = {shape: {} for shape in SHAPES}
+    shape_timing      = {shape: {} for shape in SHAPES}
 
     print("\n" + "=" * 80)
-    print("       MAZE GENERATION BENCHMARK — DAA PROJECT")
+    print("       MAZE GENERATION BENCHMARK")
     print("=" * 80)
 
     # ------------------------------------------------------------------
-    # USE CASE 1: SIZE SCALING
+    # USE CASE 1: SIZE SCALING — ALL SHAPES
     # ------------------------------------------------------------------
-    print("\n--- USE CASE 1: SIZE SCALING (10×10 → 500×500) ---")
-    sizes  = [(10, 10), (25, 25), (50, 50), (100, 100), (250, 250), (500, 500)]
-    header = f"{'Algorithm':<15}" + "".join(f"{f'{r}x{c}':>14}" for r, c in sizes)
-    print(header)
-    print('-' * len(header))
+    # [CHANGED] Previously only ran Rectangle at each size.
+    # Now iterates over every shape at every size so that .maze files and
+    # .png images are generated for all shape × size combinations and
+    # their times are all recorded in the CSV.
+    # The printed table shows one shape at a time for readability.
+    # ------------------------------------------------------------------
+    print("\n--- USE CASE 1: SIZE SCALING (all shapes, 10×10 → 500×500) ---")
+    sizes = [(10, 10), (25, 25), (50, 50), (100, 100), (250, 250), (500, 500)]
 
-    for alg, gen in ALGORITHMS.items():
-        times = []
-        for r, c in sizes:
-            if SKIP_WILSON_LARGE and alg == "Wilson" and r * c >= 250 * 250:
-                times.append("—")
-                continue
-            maze, elapsed, _ = time_and_memory(gen, r, c)
-            times.append(fmt_time(elapsed))
-            # [ADDED] log time to CSV buffer
-            _log_csv("UC1_SizeScaling", alg, "Rectangle", r, c, elapsed)
-            base = f"{alg}_{r}x{c}"
-            save_maze_and_image(maze, base, r, c)
-            if (r, c) in viewable_sizes:
-                maze_collection[alg][(r, c)] = maze
-        print(f"{alg:<15}" + "".join(f"{t:>14}" for t in times))
+    for shape_name, shape_func in SHAPES.items():
+        # Print a sub-header for each shape
+        print(f"\n  Shape: {shape_name}")
+        header = f"  {'Algorithm':<15}" + "".join(f"{f'{r}x{c}':>14}" for r, c in sizes)
+        print(header)
+        print('  ' + '-' * (len(header) - 2))
+
+        for alg, gen in ALGORITHMS.items():
+            times = []
+            for r, c in sizes:
+                # Skip Wilson on large grids regardless of shape
+                if SKIP_WILSON_LARGE and alg == "Wilson" and r * c >= 250 * 250:
+                    times.append("—")
+                    continue
+
+                # Build the shape mask for this size
+                mask = shape_func(r, c) if shape_func is not None else None
+
+                maze, elapsed, _ = time_and_memory(gen, r, c, mask=mask)
+                times.append(fmt_time(elapsed))
+
+                # Log to CSV
+                _log_csv("UC1_SizeScaling", alg, shape_name, r, c, elapsed)
+
+                # Save .maze + .png
+                base = f"{alg}_{shape_name}_{r}x{c}"
+                save_maze_and_image(maze, base, r, c)
+
+                # Keep small mazes for the interactive viewer
+                if (r, c) in viewable_sizes:
+                    maze_collection[alg][(r, c)] = maze
+
+            print(f"  {alg:<15}" + "".join(f"{t:>14}" for t in times))
 
     # ------------------------------------------------------------------
-    # USE CASE 2: ASPECT RATIO VARIATION
+    # USE CASE 2: ASPECT RATIO VARIATION  (Rectangle only — unchanged)
     # ------------------------------------------------------------------
     print("\n--- USE CASE 2: ASPECT RATIO VARIATION ---")
     aspects = [
@@ -1052,7 +1060,6 @@ def main(show_viewer=True):
                 continue
             maze, elapsed, _ = time_and_memory(gen, r, c)
             values.append(fmt_time(elapsed))
-            # [ADDED]
             _log_csv("UC2_AspectRatio", alg, "Rectangle", r, c, elapsed,
                      notes=name)
             base = f"{alg}_{name}_{r}x{c}"
@@ -1062,7 +1069,7 @@ def main(show_viewer=True):
         print(f"{alg:<15}" + "".join(f"{v:>14}" for v in values))
 
     # ------------------------------------------------------------------
-    # USE CASE 3: STRUCTURE METRICS (100×100) — NO BFS
+    # USE CASE 3: STRUCTURE METRICS (100×100) — NO BFS  (unchanged)
     # ------------------------------------------------------------------
     print("\n--- USE CASE 3: STRUCTURE METRICS ON 100×100 MAZES (no pathfinding) ---")
     print(f"{'Algorithm':<15} {'Dead-End %':>11} {'Avg Branch':>11}")
@@ -1070,25 +1077,23 @@ def main(show_viewer=True):
     for alg, gen in ALGORITHMS.items():
         maze, elapsed, _ = time_and_memory(gen, 100, 100)
         dead_pct, avg_branch = maze_metrics(maze)
-        # [ADDED]
         _log_csv("UC3_StructureMetrics", alg, "Rectangle", 100, 100, elapsed)
         print(f"{alg:<15} {dead_pct:>10.1f}% {avg_branch:>11.2f}")
 
     # ------------------------------------------------------------------
-    # USE CASE 4: MEMORY EFFICIENCY (100×100)
+    # USE CASE 4: MEMORY EFFICIENCY (100×100)  (unchanged)
     # ------------------------------------------------------------------
     print("\n--- USE CASE 4: MEMORY EFFICIENCY (100×100) ---")
     print(f"{'Algorithm':<15} {'Peak Memory (MB)':>20}")
     print('-' * 37)
     for alg, gen in ALGORITHMS.items():
         maze, elapsed, peak_mb = time_and_memory(gen, 100, 100, collect_mem=True)
-        # [ADDED]
         _log_csv("UC4_Memory", alg, "Rectangle", 100, 100, elapsed,
                  notes=f"peak_mem_mb={peak_mb:.2f}")
         print(f"{alg:<15} {peak_mb:>20.2f} MB")
 
     # ------------------------------------------------------------------
-    # USE CASE 5: SHAPE VARIATION (with time and passable %)
+    # USE CASE 5: SHAPE VARIATION (with time and passable %)  (unchanged)
     # ------------------------------------------------------------------
     print("\n--- USE CASE 5: SHAPE VARIATION (100×100 bound, various shapes) ---")
     shape_test_size = (100, 100)
@@ -1106,18 +1111,16 @@ def main(show_viewer=True):
             passable  = sum(r.count(True) for r in maze.mask)
             pass_pct  = (passable / total_cells) * 100
             dead_pct, avg_branch = maze_metrics(maze)
-            # [ADDED]
             _log_csv("UC5_ShapeVariation", alg, shape_name,
                      *shape_test_size, elapsed)
             base = f"{alg}_{shape_name}_{shape_test_size[0]}x{shape_test_size[1]}"
             save_maze_and_image(maze, base, shape_test_size[0], shape_test_size[1])
             print(f"{alg:<15} {shape_name:<12} {passable:>10} {pass_pct:>7.1f}% "
                   f"{fmt_time(elapsed):>12} {dead_pct:>7.1f}% {avg_branch:>8.2f}")
-            # [ADDED] record for best-maze selection
             shape_timing[shape_name][alg] = (maze, elapsed)
 
     # ------------------------------------------------------------------
-    # [ADDED] FLUSH CSV  +  SELECT BEST MAZES
+    # FLUSH CSV  +  SELECT BEST MAZES
     # ------------------------------------------------------------------
     _flush_csv()
     select_and_save_best_mazes(shape_timing)

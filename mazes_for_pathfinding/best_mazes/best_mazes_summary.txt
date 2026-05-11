@@ -1,0 +1,39 @@
+BEST MAZES SUMMARY — 100×100 grid, one maze per shape
+Selection criterion : lowest wall-clock generation time
+======================================================================
+Shape     : Rectangle
+Algorithm : Eller
+Time      : 0.025623 s
+Maze file : mazes_for_pathfinding\best_mazes\BEST_Rectangle_100x100_Eller.maze
+Image     : mazes_for_pathfinding\best_mazes\BEST_Rectangle_100x100_Eller.png
+----------------------------------------------------------------------
+Shape     : Circle
+Algorithm : Kruskal
+Time      : 0.020600 s
+Maze file : mazes_for_pathfinding\best_mazes\BEST_Circle_100x100_Kruskal.maze
+Image     : mazes_for_pathfinding\best_mazes\BEST_Circle_100x100_Kruskal.png
+----------------------------------------------------------------------
+Shape     : Diamond
+Algorithm : Eller
+Time      : 0.012739 s
+Maze file : mazes_for_pathfinding\best_mazes\BEST_Diamond_100x100_Eller.maze
+Image     : mazes_for_pathfinding\best_mazes\BEST_Diamond_100x100_Eller.png
+----------------------------------------------------------------------
+Shape     : Triangle
+Algorithm : Eller
+Time      : 0.012298 s
+Maze file : mazes_for_pathfinding\best_mazes\BEST_Triangle_100x100_Eller.maze
+Image     : mazes_for_pathfinding\best_mazes\BEST_Triangle_100x100_Eller.png
+----------------------------------------------------------------------
+Shape     : Cross
+Algorithm : Eller
+Time      : 0.013538 s
+Maze file : mazes_for_pathfinding\best_mazes\BEST_Cross_100x100_Eller.maze
+Image     : mazes_for_pathfinding\best_mazes\BEST_Cross_100x100_Eller.png
+----------------------------------------------------------------------
+Shape     : Star
+Algorithm : Eller
+Time      : 0.009030 s
+Maze file : mazes_for_pathfinding\best_mazes\BEST_Star_100x100_Eller.maze
+Image     : mazes_for_pathfinding\best_mazes\BEST_Star_100x100_Eller.png
+----------------------------------------------------------------------
