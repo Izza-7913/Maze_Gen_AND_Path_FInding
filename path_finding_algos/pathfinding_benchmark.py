@@ -874,7 +874,12 @@ class AHPP:
             return -1, [], total_explored
 
         # 3. Intersection A* constrained to region path (Layer 1)
+        # Expand by one region in every direction so intersection nodes that
+        # sit on region boundaries aren't incorrectly excluded.
         allowed = set(reg_path)
+        for ri, rj in list(allowed):
+            for di, dj in [(-1,0),(1,0),(0,-1),(0,1)]:
+                allowed.add((ri+di, rj+dj))
         int_path, int_exp = self._a_star_intersections(
             start_node, goal_node, allowed)
         total_explored += int_exp
@@ -992,17 +997,31 @@ class AHPP:
         return smoothed
 
     def _line_of_sight(self, a, b):
-        """4-connected line-of-sight: all intermediate cells must be passable."""
+        """
+        Wall-respecting line-of-sight along carved passages only.
+        Only allows straight horizontal or vertical runs where every
+        cell-to-cell step is an open passage (wall bit must be set).
+        Diagonal shortcuts are disallowed — grid mazes have no diagonal walls.
+        """
         r1, c1 = a; r2, c2 = b
-        steps = max(abs(r2-r1), abs(c2-c1))
-        if steps == 0: return True
-        r, c = r1, c1
-        for _ in range(steps):
-            if r < r2: r += 1
-            elif r > r2: r -= 1
-            if c < c2: c += 1
-            elif c > c2: c -= 1
-            if not self.maze.mask[r][c]: return False
+        if r1 == r2 == r2 and c1 == c2:
+            return True
+        # Only allow axis-aligned LoS on grid mazes
+        if r1 != r2 and c1 != c2:
+            return False
+        maze = self.maze
+        if r1 == r2:  # horizontal
+            step = 1 if c2 > c1 else -1
+            bit  = maze.E if step == 1 else maze.W
+            for c in range(c1, c2, step):
+                if not (maze.grid[r1][c] & bit):
+                    return False
+        else:         # vertical
+            step = 1 if r2 > r1 else -1
+            bit  = maze.S if step == 1 else maze.N
+            for r in range(r1, r2, step):
+                if not (maze.grid[r][c1] & bit):
+                    return False
         return True
 
     # ------------------------------------------------------------------
