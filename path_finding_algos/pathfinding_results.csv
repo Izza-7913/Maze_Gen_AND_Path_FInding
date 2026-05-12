@@ -1,0 +1,64 @@
+use_case,algorithm,shape,maze_file,time_sec,path_len_cells,path_len_euclidean,nodes_explored,notes
+UC1_BasicPathfinding,ThetaStar,Circle,BEST_Circle_100x100_Kruskal.maze,0.012125,167,324.6102,4551,path_length=166
+UC1_BasicPathfinding,BidirectionalDijkstra,Circle,BEST_Circle_100x100_Kruskal.maze,0.011935,359,358.0000,6581,path_length=358
+UC1_BasicPathfinding,ALT,Circle,BEST_Circle_100x100_Kruskal.maze,0.100513,359,358.0000,1564,path_length=358
+UC1_BasicPathfinding,ThetaStar,Cross,BEST_Cross_100x100_Eller.maze,0.005334,97,200.1127,2228,path_length=96
+UC1_BasicPathfinding,BidirectionalDijkstra,Cross,BEST_Cross_100x100_Eller.maze,0.006684,214,213.0000,2800,path_length=213
+UC1_BasicPathfinding,ALT,Cross,BEST_Cross_100x100_Eller.maze,0.034065,214,213.0000,2798,path_length=213
+UC1_BasicPathfinding,ThetaStar,Diamond,BEST_Diamond_100x100_Eller.maze,0.005573,0,0.0000,2296,path_length=-1
+UC1_BasicPathfinding,BidirectionalDijkstra,Diamond,BEST_Diamond_100x100_Eller.maze,0.008720,0,0.0000,4908,path_length=-1
+UC1_BasicPathfinding,ALT,Diamond,BEST_Diamond_100x100_Eller.maze,0.028067,0,0.0000,2296,path_length=-1
+UC1_BasicPathfinding,ThetaStar,Rectangle,BEST_Rectangle_100x100_Eller.maze,0.012546,146,313.3970,4281,path_length=145
+UC1_BasicPathfinding,BidirectionalDijkstra,Rectangle,BEST_Rectangle_100x100_Eller.maze,0.010783,339,338.0000,5488,path_length=338
+UC1_BasicPathfinding,ALT,Rectangle,BEST_Rectangle_100x100_Eller.maze,0.127766,339,338.0000,2110,path_length=338
+UC1_BasicPathfinding,ThetaStar,Star,BEST_Star_100x100_Eller.maze,0.004361,0,0.0000,1150,path_length=-1
+UC1_BasicPathfinding,BidirectionalDijkstra,Star,BEST_Star_100x100_Eller.maze,0.003168,0,0.0000,1387,path_length=-1
+UC1_BasicPathfinding,ALT,Star,BEST_Star_100x100_Eller.maze,0.018631,0,0.0000,1150,path_length=-1
+UC1_BasicPathfinding,ThetaStar,Triangle,BEST_Triangle_100x100_Eller.maze,0.008854,194,394.6102,3729,path_length=193
+UC1_BasicPathfinding,BidirectionalDijkstra,Triangle,BEST_Triangle_100x100_Eller.maze,0.009247,429,428.0000,4369,path_length=428
+UC1_BasicPathfinding,ALT,Triangle,BEST_Triangle_100x100_Eller.maze,0.069596,429,428.0000,2194,path_length=428
+UC1_BasicPathfinding,ThetaStar,Triangle,BEST_Triangle_100x100_Prim.maze,0.008632,87,221.1127,3600,path_length=86
+UC1_BasicPathfinding,BidirectionalDijkstra,Triangle,BEST_Triangle_100x100_Prim.maze,0.004248,235,234.0000,2300,path_length=234
+UC1_BasicPathfinding,ALT,Triangle,BEST_Triangle_100x100_Prim.maze,0.066998,235,234.0000,235,path_length=234
+UC2_PathQuality,ThetaStar,Circle,BEST_Circle_100x100_Kruskal.maze,0.012908,167,324.6102,4551,path_length=166 step_euc_ratio=0.511
+UC2_PathQuality,BidirectionalDijkstra,Circle,BEST_Circle_100x100_Kruskal.maze,0.013873,359,358.0000,6581,path_length=358 step_euc_ratio=1.000
+UC2_PathQuality,ALT,Circle,BEST_Circle_100x100_Kruskal.maze,0.105009,359,358.0000,1565,path_length=358 step_euc_ratio=1.000
+UC2_PathQuality,ThetaStar,Cross,BEST_Cross_100x100_Eller.maze,0.005843,97,200.1127,2228,path_length=96 step_euc_ratio=0.480
+UC2_PathQuality,BidirectionalDijkstra,Cross,BEST_Cross_100x100_Eller.maze,0.006144,214,213.0000,2800,path_length=213 step_euc_ratio=1.000
+UC2_PathQuality,ALT,Cross,BEST_Cross_100x100_Eller.maze,0.034010,214,213.0000,2490,path_length=213 step_euc_ratio=1.000
+UC2_PathQuality,ThetaStar,Diamond,BEST_Diamond_100x100_Eller.maze,0.005906,0,0.0000,2296,path_length=-1 step_euc_ratio=0.000
+UC2_PathQuality,BidirectionalDijkstra,Diamond,BEST_Diamond_100x100_Eller.maze,0.008632,0,0.0000,4908,path_length=-1 step_euc_ratio=0.000
+UC2_PathQuality,ALT,Diamond,BEST_Diamond_100x100_Eller.maze,0.031942,0,0.0000,2296,path_length=-1 step_euc_ratio=0.000
+UC2_PathQuality,ThetaStar,Rectangle,BEST_Rectangle_100x100_Eller.maze,0.009464,146,313.3970,4281,path_length=145 step_euc_ratio=0.463
+UC2_PathQuality,BidirectionalDijkstra,Rectangle,BEST_Rectangle_100x100_Eller.maze,0.009900,339,338.0000,5488,path_length=338 step_euc_ratio=1.000
+UC2_PathQuality,ALT,Rectangle,BEST_Rectangle_100x100_Eller.maze,0.132691,339,338.0000,2158,path_length=338 step_euc_ratio=1.000
+UC2_PathQuality,ThetaStar,Star,BEST_Star_100x100_Eller.maze,0.002536,0,0.0000,1150,path_length=-1 step_euc_ratio=0.000
+UC2_PathQuality,BidirectionalDijkstra,Star,BEST_Star_100x100_Eller.maze,0.002431,0,0.0000,1387,path_length=-1 step_euc_ratio=0.000
+UC2_PathQuality,ALT,Star,BEST_Star_100x100_Eller.maze,0.019276,0,0.0000,1150,path_length=-1 step_euc_ratio=0.000
+UC2_PathQuality,ThetaStar,Triangle,BEST_Triangle_100x100_Eller.maze,0.009246,194,394.6102,3729,path_length=193 step_euc_ratio=0.489
+UC2_PathQuality,BidirectionalDijkstra,Triangle,BEST_Triangle_100x100_Eller.maze,0.008500,429,428.0000,4369,path_length=428 step_euc_ratio=1.000
+UC2_PathQuality,ALT,Triangle,BEST_Triangle_100x100_Eller.maze,0.070593,429,428.0000,2081,path_length=428 step_euc_ratio=1.000
+UC2_PathQuality,ThetaStar,Triangle,BEST_Triangle_100x100_Prim.maze,0.010459,87,221.1127,3600,path_length=86 step_euc_ratio=0.389
+UC2_PathQuality,BidirectionalDijkstra,Triangle,BEST_Triangle_100x100_Prim.maze,0.004005,235,234.0000,2300,path_length=234 step_euc_ratio=1.000
+UC2_PathQuality,ALT,Triangle,BEST_Triangle_100x100_Prim.maze,0.063321,235,234.0000,235,path_length=234 step_euc_ratio=1.000
+UC3_NodesExplored,ThetaStar,Circle,BEST_Circle_100x100_Kruskal.maze,0.010520,167,324.6102,4551,path_length=166 pct_grid=57.9%
+UC3_NodesExplored,BidirectionalDijkstra,Circle,BEST_Circle_100x100_Kruskal.maze,0.013123,359,358.0000,6581,path_length=358 pct_grid=83.7%
+UC3_NodesExplored,ALT,Circle,BEST_Circle_100x100_Kruskal.maze,0.103671,359,358.0000,1567,path_length=358 pct_grid=19.9%
+UC3_NodesExplored,ThetaStar,Cross,BEST_Cross_100x100_Eller.maze,0.006328,97,200.1127,2228,path_length=96 pct_grid=40.4%
+UC3_NodesExplored,BidirectionalDijkstra,Cross,BEST_Cross_100x100_Eller.maze,0.005879,214,213.0000,2800,path_length=213 pct_grid=50.8%
+UC3_NodesExplored,ALT,Cross,BEST_Cross_100x100_Eller.maze,0.032714,214,213.0000,2958,path_length=213 pct_grid=53.7%
+UC3_NodesExplored,ThetaStar,Diamond,BEST_Diamond_100x100_Eller.maze,0.005720,0,0.0000,2296,path_length=-1 pct_grid=45.0%
+UC3_NodesExplored,BidirectionalDijkstra,Diamond,BEST_Diamond_100x100_Eller.maze,0.009225,0,0.0000,4908,path_length=-1 pct_grid=96.2%
+UC3_NodesExplored,ALT,Diamond,BEST_Diamond_100x100_Eller.maze,0.032702,0,0.0000,2296,path_length=-1 pct_grid=45.0%
+UC3_NodesExplored,ThetaStar,Rectangle,BEST_Rectangle_100x100_Eller.maze,0.011937,146,313.3970,4281,path_length=145 pct_grid=42.8%
+UC3_NodesExplored,BidirectionalDijkstra,Rectangle,BEST_Rectangle_100x100_Eller.maze,0.010391,339,338.0000,5488,path_length=338 pct_grid=54.9%
+UC3_NodesExplored,ALT,Rectangle,BEST_Rectangle_100x100_Eller.maze,0.127650,339,338.0000,339,path_length=338 pct_grid=3.4%
+UC3_NodesExplored,ThetaStar,Star,BEST_Star_100x100_Eller.maze,0.002635,0,0.0000,1150,path_length=-1 pct_grid=30.9%
+UC3_NodesExplored,BidirectionalDijkstra,Star,BEST_Star_100x100_Eller.maze,0.002354,0,0.0000,1387,path_length=-1 pct_grid=37.2%
+UC3_NodesExplored,ALT,Star,BEST_Star_100x100_Eller.maze,0.018581,0,0.0000,1150,path_length=-1 pct_grid=30.9%
+UC3_NodesExplored,ThetaStar,Triangle,BEST_Triangle_100x100_Eller.maze,0.008278,194,394.6102,3729,path_length=193 pct_grid=73.9%
+UC3_NodesExplored,BidirectionalDijkstra,Triangle,BEST_Triangle_100x100_Eller.maze,0.007650,429,428.0000,4369,path_length=428 pct_grid=86.6%
+UC3_NodesExplored,ALT,Triangle,BEST_Triangle_100x100_Eller.maze,0.070889,429,428.0000,2081,path_length=428 pct_grid=41.2%
+UC3_NodesExplored,ThetaStar,Triangle,BEST_Triangle_100x100_Prim.maze,0.010424,87,221.1127,3600,path_length=86 pct_grid=71.3%
+UC3_NodesExplored,BidirectionalDijkstra,Triangle,BEST_Triangle_100x100_Prim.maze,0.003934,235,234.0000,2300,path_length=234 pct_grid=45.6%
+UC3_NodesExplored,ALT,Triangle,BEST_Triangle_100x100_Prim.maze,0.074690,235,234.0000,2469,path_length=234 pct_grid=48.9%
